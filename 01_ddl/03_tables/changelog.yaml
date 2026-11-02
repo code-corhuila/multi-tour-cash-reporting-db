@@ -46,3 +46,35 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/003_create_cash_session.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-004
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      # DP-D1-1 (immutable closure snapshots): the PROPUESTO default is taken, so each closing is one
+      # row of cash_session_closure and the session keeps the current closing. Open with the Project Lead.
+      comment: "cash_session_closure: immutable snapshot of each closing, the formula and the sums by medium held by checks (AC-D1.8, RN-CAJ-001, CR-06)."
+      changes:
+        - sqlFile:
+            path: 004_create_cash_session_closure.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/004_create_cash_session_closure.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-005
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_session_reopening: reason, user, time and the closure reopened; one reopening per closure, many per session (AC-D1.9, RN-CAJ-001, CA-010)."
+      changes:
+        - sqlFile:
+            path: 005_create_cash_session_reopening.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/005_create_cash_session_reopening.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
