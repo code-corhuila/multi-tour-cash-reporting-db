@@ -1,0 +1,31 @@
+databaseChangeLog:
+  - changeSet:
+      id: dcl-roles-001
+      author: FernandaRobayo
+      labels: "HU-CSH-001,dcl,roles"
+      comment: "cash_reporting_reader: read-only bundle of privileges, NOLOGIN and without a password."
+      changes:
+        - sqlFile:
+            path: 001_create_role_cash_reporting_reader.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/00_roles/001_create_role_cash_reporting_reader.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: dcl-roles-002
+      author: FernandaRobayo
+      labels: "HU-CSH-001,dcl,roles"
+      comment: "cash_reporting_writer: read and write bundle of privileges, NOLOGIN and without a password."
+      changes:
+        - sqlFile:
+            path: 002_create_role_cash_reporting_writer.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/00_roles/002_create_role_cash_reporting_writer.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

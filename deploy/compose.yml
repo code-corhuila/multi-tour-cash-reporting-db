@@ -1,0 +1,33 @@
+# Only the migration runner of this schema (Annex J.7). The instance, its storage, its extensions and
+# its users belong to multi-tour-infra-postgres, whose root compose file includes this one and
+# defines the postgres service that the runner waits for.
+#
+# Start it from that root file, with its environment file:
+#   docker compose --profile tooling run --rm cash-reporting-db-migrate
+services:
+  cash-reporting-db-migrate:
+    # tooling: it runs on demand and never starts with the platform
+    profiles: [tooling]
+    # The migrations are copied into the image, so the runner needs no volume of its own.
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The credentials stay in the environment, out of the command line and out of process listings.
+    environment:
+      LIQUIBASE_COMMAND_URL: jdbc:postgresql://postgres:5432/${PG_DATABASE:?PG_DATABASE is required, set it in the infrastructure environment file}
+      LIQUIBASE_COMMAND_USERNAME: ${PG_ADMIN_USER:?PG_ADMIN_USER is required, set it in the infrastructure environment file}
+      LIQUIBASE_COMMAND_PASSWORD: ${PG_ADMIN_PASSWORD:?PG_ADMIN_PASSWORD is required, set it in the infrastructure environment file}
+    # Own control tables, so that another domain migrating the same instance does not collide (Annex J.6)
+    command:
+      - --changelog-file=changelog/changelog-master.yaml
+      - --database-changelog-table-name=databasechangelog_cash_reporting
+      - --database-changelog-lock-table-name=databasechangeloglock_cash_reporting
+      - update
+    networks: [platform]
+
+networks:
+  platform:
+    external: true
