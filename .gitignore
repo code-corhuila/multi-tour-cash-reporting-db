@@ -1,0 +1,15 @@
+# Secrets and keys never enter this repository (constitution article XI)
+.env
+*.pem
+keys/
+
+# Local noise
+*.log
+tmp/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Liquibase offline mode writes its control file here
+databasechangelog*.csv
