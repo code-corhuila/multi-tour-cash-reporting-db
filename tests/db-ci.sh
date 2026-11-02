@@ -111,6 +111,68 @@ check "an unknown status is refused by chk_outbox_event_status" "$(refused "upda
 check "PUBLISHED without published_at is refused by chk_outbox_event_published_at" "$(refused "update $SCHEMA.outbox_event set status = 'PUBLISHED'" chk_outbox_event_published_at; echo $?)"
 check "a payload that is not an object is refused by chk_outbox_event_payload_object" "$(refused "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'RefundExecuted', gen_random_uuid(), '[]', now())" chk_outbox_event_payload_object; echo $?)"
 
+
+# T-03. The cash session. Probes run as the owner: they judge constraints, not grants (T-07).
+sess() { echo "insert into $SCHEMA.cash_session ($1) values ($2)"; }
+S_COLS="tenant_id, business_date, time_zone, origin, created_at"
+s_vals() { echo "'$1', '$2', 'America/Bogota', '${3:-AUTOMATIC_CREATION}', now()"; }
+OPEN_COLS="opening_base_cents, opened_at, opened_by"
+OPEN_VALS="300000, now(), gen_random_uuid()"
+CLOSED_COLS="$S_COLS, status, closed_at, closing_mode, closing_balance_cents, closed_by"
+
+echo "AC-D1.2 - cash session holds the columns of the model"
+cols="cash_session_id tenant_id business_date time_zone origin created_at opening_base_cents opened_at opened_by closed_at closing_mode status closing_balance_cents closed_by pending_closure"
+have=0; for c in $cols; do have=$((have + $(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_session' and column_name = '$c'"))); done
+check "the table holds the 15 columns of plan D-03" "$([ "$have" = 15 ]; echo $?)"
+check "business_date is a date and the money is bigint cents" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_session' and ((column_name = 'business_date' and data_type = 'date') or (column_name in ('opening_base_cents','closing_balance_cents') and data_type = 'bigint'))")" = 3 ]; echo $?)"
+check "uq_cash_session_tenant_cash_session exists as the target of the composite keys" "$([ "$(sql "select count(*) from pg_constraint where conname = 'uq_cash_session_tenant_cash_session'")" = 1 ]; echo $?)"
+
+echo "AC-D1.3 - a tenant has one cash per date whatever created it"
+check "an automatic creation is accepted" "$(sql "$(sess "$S_COLS" "$(s_vals $tenant_a 2026-09-01)")" >/dev/null 2>&1; echo $?)"
+check "a second cash for the same tenant and date, same origin, is refused by uq_cash_session_tenant_business_date" "$(refused "$(sess "$S_COLS" "$(s_vals $tenant_a 2026-09-01)")" uq_cash_session_tenant_business_date; echo $?)"
+check "a second cash with the other origin is refused by uq_cash_session_tenant_business_date" "$(refused "$(sess "$S_COLS" "$(s_vals $tenant_a 2026-09-01 OPERATIONAL_OPENING)")" uq_cash_session_tenant_business_date; echo $?)"
+check "another tenant may hold a cash for that date" "$(sql "$(sess "$S_COLS" "$(s_vals $tenant_b 2026-09-01)")" >/dev/null 2>&1; echo $?)"
+
+echo "AC-D1.4 - a cash session without its required columns is refused"
+req_insert() { # the column that is sent null
+  local v_tenant="'$tenant_a'" v_date="'2026-09-02'" v_zone="'America/Bogota'" v_origin="'AUTOMATIC_CREATION'" v_created="now()" v_status="'OPEN'"
+  case "$1" in tenant_id) v_tenant=null ;; business_date) v_date=null ;; time_zone) v_zone=null ;; origin) v_origin=null ;; created_at) v_created=null ;; status) v_status=null ;; esac
+  sess "tenant_id, business_date, time_zone, origin, created_at, status" "$v_tenant, $v_date, $v_zone, $v_origin, $v_created, $v_status"
+}
+for c in tenant_id business_date time_zone origin created_at status; do
+  n="${c%_id}"; check "a null $c is refused by chk_cash_session_${n}_required" "$(refused "$(req_insert $c)" chk_cash_session_${n}_required; echo $?)"
+done
+check "a blank time zone is refused by chk_cash_session_time_zone_required" "$(refused "$(sess "$S_COLS" "'$tenant_a', '2026-09-02', '  ', 'AUTOMATIC_CREATION', now()")" chk_cash_session_time_zone_required; echo $?)"
+check "an origin outside the list is refused by chk_cash_session_origin" "$(refused "$(sess "$S_COLS" "$(s_vals $tenant_a 2026-09-02 MANUAL)")" chk_cash_session_origin; echo $?)"
+check "a status outside the list is refused by chk_cash_session_status" "$(refused "$(sess "$S_COLS, status" "$(s_vals $tenant_a 2026-09-02), 'PENDING'")" chk_cash_session_status; echo $?)"
+check "a new cash starts OPEN and not pending" "$([ "$(sql "select count(*) from $SCHEMA.cash_session where status = 'OPEN' and not pending_closure")" = 2 ]; echo $?)"
+
+echo "AC-D1.5 - opening data is all or none and the base is not negative"
+check "an operational opening with base time and user is accepted" "$(sql "$(sess "$S_COLS, $OPEN_COLS" "$(s_vals $tenant_a 2026-09-03 OPERATIONAL_OPENING), $OPEN_VALS")" >/dev/null 2>&1; echo $?)"
+check "an opening with a base of zero is accepted" "$(sql "$(sess "$S_COLS, $OPEN_COLS" "$(s_vals $tenant_a 2026-09-04 OPERATIONAL_OPENING), 0, now(), gen_random_uuid()")" >/dev/null 2>&1; echo $?)"
+check "only a base is refused by chk_cash_session_opening_all_or_none" "$(refused "$(sess "$S_COLS, opening_base_cents" "$(s_vals $tenant_a 2026-09-05 OPERATIONAL_OPENING), 300000")" chk_cash_session_opening_all_or_none; echo $?)"
+check "only the opening user is refused by chk_cash_session_opening_all_or_none" "$(refused "$(sess "$S_COLS, opened_by" "$(s_vals $tenant_a 2026-09-05 OPERATIONAL_OPENING), gen_random_uuid()")" chk_cash_session_opening_all_or_none; echo $?)"
+check "a negative base is refused by chk_cash_session_opening_base_nonnegative" "$(refused "$(sess "$S_COLS, $OPEN_COLS" "$(s_vals $tenant_a 2026-09-05 OPERATIONAL_OPENING), -1, now(), gen_random_uuid()")" chk_cash_session_opening_base_nonnegative; echo $?)"
+check "an automatic cash opened later keeps its origin" "$(sql "update $SCHEMA.cash_session set opening_base_cents = 100000, opened_at = now(), opened_by = gen_random_uuid() where tenant_id = '$tenant_a' and business_date = '2026-09-01'" >/dev/null 2>&1; echo $?)"
+check "the opened automatic cash is still AUTOMATIC_CREATION" "$([ "$(sql "select origin from $SCHEMA.cash_session where tenant_id = '$tenant_a' and business_date = '2026-09-01'")" = AUTOMATIC_CREATION ]; echo $?)"
+
+echo "AC-D1.6 - a closed session holds its closing and an open one does not"
+check "a formal closing with its user is accepted" "$(sql "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-06), 'CLOSED', now(), 'FORMAL', 1100000, gen_random_uuid()")" >/dev/null 2>&1; echo $?)"
+check "a negative closing balance is accepted" "$(sql "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-07), 'CLOSED', now(), 'FORMAL', -50000, gen_random_uuid()")" >/dev/null 2>&1; echo $?)"
+check "an automatic closing without user is accepted" "$(sql "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-08), 'CLOSED', now(), 'AUTOMATIC', 0, null")" >/dev/null 2>&1; echo $?)"
+check "a formal closing without user is refused by chk_cash_session_closed_columns" "$(refused "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-09), 'CLOSED', now(), 'FORMAL', 0, null")" chk_cash_session_closed_columns; echo $?)"
+check "an automatic closing with a user is refused by chk_cash_session_closed_columns" "$(refused "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-09), 'CLOSED', now(), 'AUTOMATIC', 0, gen_random_uuid()")" chk_cash_session_closed_columns; echo $?)"
+check "a closed session without balance is refused by chk_cash_session_closed_columns" "$(refused "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-09), 'CLOSED', now(), 'FORMAL', null, gen_random_uuid()")" chk_cash_session_closed_columns; echo $?)"
+check "a closed session without closing time is refused by chk_cash_session_closed_columns" "$(refused "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-09), 'CLOSED', null, 'FORMAL', 0, gen_random_uuid()")" chk_cash_session_closed_columns; echo $?)"
+check "an open session with a closing column is refused by chk_cash_session_closed_columns" "$(refused "$(sess "$S_COLS, closed_at" "$(s_vals $tenant_a 2026-09-09), now()")" chk_cash_session_closed_columns; echo $?)"
+check "a closing mode outside the list is refused by chk_cash_session_closing_mode" "$(refused "$(sess "$CLOSED_COLS" "$(s_vals $tenant_a 2026-09-09), 'CLOSED', now(), 'MANUAL', 0, gen_random_uuid()")" chk_cash_session_closing_mode; echo $?)"
+
+echo "AC-D1.7 - the pending mark needs an open session with opening"
+check "the mark on an open session with opening is accepted" "$(sql "$(sess "$S_COLS, $OPEN_COLS, pending_closure" "$(s_vals $tenant_a 2026-09-10 OPERATIONAL_OPENING), $OPEN_VALS, true")" >/dev/null 2>&1; echo $?)"
+check "the mark without opening is refused by chk_cash_session_pending_closure" "$(refused "$(sess "$S_COLS, pending_closure" "$(s_vals $tenant_a 2026-09-11), true")" chk_cash_session_pending_closure; echo $?)"
+check "the mark on a closed session is refused by chk_cash_session_pending_closure" "$(refused "$(sess "$CLOSED_COLS, $OPEN_COLS, pending_closure" "$(s_vals $tenant_a 2026-09-11 OPERATIONAL_OPENING), 'CLOSED', now(), 'FORMAL', 0, gen_random_uuid(), $OPEN_VALS, true")" chk_cash_session_pending_closure; echo $?)"
+check "the mark is not a status: PENDING_CLOSURE is refused as status" "$(refused "$(sess "$S_COLS, status" "$(s_vals $tenant_a 2026-09-11), 'PENDING_CLOSURE'")" chk_cash_session_status; echo $?)"
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"
