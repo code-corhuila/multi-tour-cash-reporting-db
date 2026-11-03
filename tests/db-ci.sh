@@ -276,6 +276,19 @@ check "a movement without time is refused by chk_cash_movement_registered_at_req
 check "a movement without user is refused by chk_cash_movement_registered_by_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, concept) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, now(), 'daily sale')" chk_cash_movement_registered_by_required; echo $?)"
 check "the after-closing mark starts false" "$([ "$(sql "select count(*) from $SCHEMA.cash_movement where after_closing")" = 0 ]; echo $?)"
 
+# T-05b. The concept of the movement (amendment 2026-11-03): required, not blank, at most 200, for every type.
+# A null is refused by the NOT NULL itself, which names the column; the two checks name the blank and the length.
+echo "AC-D1.10 - a movement without a concept or with a blank one is refused"
+concept_of() { mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'daily sale'/$1/"; }
+long_200="$(head -c 200 /dev/zero | tr '\0' x)"; long_201="$(head -c 201 /dev/zero | tr '\0' x)"
+check "a movement without a concept is refused" "$(refused "$(concept_of null)" 'null value in column "concept"'; echo $?)"
+check "a blank concept is refused by chk_cash_movement_concept_required" "$(refused "$(concept_of "''")" chk_cash_movement_concept_required; echo $?)"
+check "a concept of only spaces is refused by chk_cash_movement_concept_required" "$(refused "$(concept_of "'   '")" chk_cash_movement_concept_required; echo $?)"
+check "a concept with text is accepted for every type, refund included" "$(sql "$(mv_sql $tenant_a $sess_1 REFUND CASH 1000)" >/dev/null 2>&1; echo $?)"
+echo "AC-D1.10 - a concept longer than 200 characters is refused"
+check "a concept of 201 characters is refused by chk_cash_movement_concept_length" "$(refused "$(concept_of "'$long_201'")" chk_cash_movement_concept_length; echo $?)"
+check "a concept of 200 characters is accepted" "$(sql "$(concept_of "'$long_200'")" >/dev/null 2>&1; echo $?)"
+
 echo "AC-D1.11 - only a transfer can be marked after closing"
 check "a transfer marked after closing is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME TRANSFER 80000 after_closing true)" >/dev/null 2>&1; echo $?)"
 check "a cash movement marked after closing is refused by chk_cash_movement_after_closing_transfer_only" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 80000 after_closing true)" chk_cash_movement_after_closing_transfer_only; echo $?)"
