@@ -398,8 +398,9 @@ check "the reader holds nothing on the two technical tables" "$([ "$(privs cash_
 
 echo "AC-D1.20 - the five reads use their indexes"
 # The tables hold a handful of rows, so the planner would prefer a sequential scan whatever the indexes.
-# enable_seqscan = off is set inside each probe: it makes the plan show which index the read can use.
-plan() { app_sql "set enable_seqscan = off; explain (costs off) $1"; }
+# enable_seqscan and enable_bitmapscan are set off inside each probe: the plan then shows the index that serves the
+# read in its own order, and a Sort node would show an index that does not give the order the screen needs.
+plan() { app_sql "set enable_seqscan = off; set enable_bitmapscan = off; explain (costs off) $1"; }
 read_1="select * from $SCHEMA.cash_session where tenant_id = '$tenant_a' and business_date = '2026-09-01'"
 read_2="select * from $SCHEMA.cash_movement where tenant_id = '$tenant_a' and cash_session_id = '$sess_1' order by registered_at desc"
 read_3="select * from $SCHEMA.cash_session_closure where tenant_id = '$tenant_a' order by closed_at desc"
@@ -411,6 +412,7 @@ for spec in "uq_cash_session_tenant_business_date|$read_1|the cash of a day" "id
   n=$((n + 1)); idx="${spec%%|*}"; rest="${spec#*|}"; q="${rest%%|*}"; what="${rest#*|}"
   p="$(plan "$q" || true)"; echo "$p" | sed 's/^/        /'
   check "read $n, $what, uses $idx" "$(case "$p" in *"$idx"*) echo 0 ;; *) echo 1 ;; esac)"
+  check "read $n needs no Sort node: the index gives the order" "$(case "$p" in *Sort*) echo 1 ;; *) echo 0 ;; esac)"
 done
 check "the six indexes of the plan exist and no other idx_ index does" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 6 ]; echo $?)"
 check "the reopening key index is idx_cash_session_reopening_tenant_session_reopened_at" "$([ "$(sql "select indexdef from pg_indexes where schemaname = '$SCHEMA' and indexname = 'idx_cash_session_reopening_tenant_session_reopened_at'" | grep -c '(tenant_id, cash_session_id, reopened_at)')" = 1 ]; echo $?)"
