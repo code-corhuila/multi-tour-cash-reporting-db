@@ -1,2 +1,16 @@
-# Empty on purpose: every folder carries its changelog from day one, so the execution order is fixed.
-databaseChangeLog: []
+databaseChangeLog:
+  - changeSet:
+      id: ddl-alter-001
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,04_alter"
+      comment: "cash_movement: the required concept of every movement, not blank and at most 200 characters; presupposes an empty table (AC-D1.10)."
+      changes:
+        - sqlFile:
+            path: 001_add_cash_movement_concept.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/001_add_cash_movement_concept.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
