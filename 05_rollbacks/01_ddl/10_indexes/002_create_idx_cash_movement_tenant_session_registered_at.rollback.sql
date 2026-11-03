@@ -1,0 +1,1 @@
+DROP INDEX cash_reporting.idx_cash_movement_tenant_session_registered_at;
