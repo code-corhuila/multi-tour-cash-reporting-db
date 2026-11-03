@@ -258,7 +258,7 @@ check "an income in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME 
 check "an operational payment by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_PAYMENT TRANSFER 100000)" >/dev/null 2>&1; echo $?)"
 check "an operational expense in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH 50000)" >/dev/null 2>&1; echo $?)"
 check "a refund by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 REFUND TRANSFER 30000)" >/dev/null 2>&1; echo $?)"
-check "the movement holds the 10 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 10 ]; echo $?)"
+check "the movement holds the 9 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 9 ]; echo $?)"
 check "the amount is bigint cents" "$([ "$(sql "select data_type from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement' and column_name = 'amount_cents'")" = bigint ]; echo $?)"
 check "an amount of zero is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 0)" chk_cash_movement_amount_positive; echo $?)"
 check "a negative amount is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH -1)" chk_cash_movement_amount_positive; echo $?)"
