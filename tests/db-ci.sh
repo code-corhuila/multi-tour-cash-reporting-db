@@ -84,6 +84,10 @@ check "the application user inherits the writer" "$([ "$(sql "select pg_has_role
 refused() { # statement, constraint name that must refuse it (0 = refused by exactly that constraint)
   out="$(sql "$1" 2>&1 || true)"; case "$out" in *"$2"*) return 0 ;; *) return 1 ;; esac
 }
+# T-07. Probes that judge grants run as the application itself: SET ROLE cash_reporting_app.
+app_sql() { docker exec -e PGPASSWORD "$container" psql -q -v ON_ERROR_STOP=1 -U postgres -d postgres -tAc "set role cash_reporting_app; $1" 2>&1; }
+app_ok() { app_sql "$1" >/dev/null; }  # 0 when the engine accepted every statement as the application
+app_refuses() { case "$(app_sql "$1" || true)" in *"permission denied"*) return 0 ;; *) return 1 ;; esac; }
 tenant_a="11111111-1111-4111-8111-111111111111"
 tenant_b="22222222-2222-4222-8222-222222222222"
 key_insert() { echo "insert into $SCHEMA.idempotency_key (tenant_id, key) values ('$1', $2)"; }
@@ -211,11 +215,10 @@ check "a closure of another tenant's session is refused by fk_cash_session_closu
 check "a closure of a session that does not exist is refused by fk_cash_session_closure_cash_session" "$(refused "$(closure_sql $tenant_a 00000000-0000-4000-8000-000000000000)" fk_cash_session_closure_cash_session; echo $?)"
 
 # WAITING for T-07: the grants changeset (plan D-10) gives the application SELECT and INSERT only.
-# Until then the probe is written but not counted. Flip T07_GRANTS to 1 in the T-07 PR.
-T07_GRANTS=0
+# T07_GRANTS=1 since the T-07 PR: the probes below are counted.
+T07_GRANTS=1
 echo "AC-D1.8 - a closure is never updated or deleted by the application"
 if [ "$T07_GRANTS" = 1 ]; then
-  app_refuses() { out="$(docker exec -e PGPASSWORD "$container" psql -U postgres -d postgres -tAc "set role cash_reporting_app; $1" 2>&1 || true)"; case "$out" in *"permission denied"*) return 0 ;; *) return 1 ;; esac; }
   check "UPDATE of a closure by the application is refused" "$(app_refuses "update $SCHEMA.cash_session_closure set income_cents = 0"; echo $?)"
   check "DELETE of a closure by the application is refused" "$(app_refuses "delete from $SCHEMA.cash_session_closure"; echo $?)"
   check "UPDATE of a reopening by the application is refused" "$(app_refuses "update $SCHEMA.cash_session_reopening set reason = 'x'"; echo $?)"
@@ -346,20 +349,91 @@ check "a first detail of an authorization that exists nowhere in this database i
 check "a second detail of the same authorization is accepted (partial executions)" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m5 10000 CASH "'$auth_x'")" >/dev/null 2>&1; echo $?)"
 check "the two details share the authorization" "$([ "$(sql "select count(*) from $SCHEMA.refund_movement where refund_authorization_id = '$auth_x'")" = 2 ]; echo $?)"
 
+# T-07. Grants, isolation and plans. These probes run as the application: SET ROLE cash_reporting_app.
+tenant_c="33333333-3333-4333-8333-333333333333"
+tenant_d="44444444-4444-4444-8444-444444444444"
+privs() { # role table: the privileges it holds, in a fixed order
+  sql "select coalesce(string_agg(p, ',' order by array_position(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'], p)), 'none') from unnest(array['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p where has_table_privilege('$1', '$SCHEMA.$2', p)"
+}
+business_rows() { sql "select (select count(*) from $SCHEMA.cash_session) + (select count(*) from $SCHEMA.cash_session_closure) + (select count(*) from $SCHEMA.cash_session_reopening) + (select count(*) from $SCHEMA.cash_movement) + (select count(*) from $SCHEMA.refund_movement)"; }
+
+echo "AC-D1.18 - two tenants hold the same data and none sees the other"
+for t in $tenant_c $tenant_d; do
+  check "tenant ${t:0:1} opens a cash for 2026-11-01 as the application" "$(app_ok "$(sess "$S_COLS, $OPEN_COLS" "$(s_vals $t 2026-11-01 OPERATIONAL_OPENING), $OPEN_VALS")"; echo $?)"
+  sess_t="$(sid $t 2026-11-01)"
+  check "tenant ${t:0:1} records two movements and a key as the application" "$(app_ok "$(mv_sql $t "${sess_t:-none}" INCOME CASH 1000); $(mv_sql $t "${sess_t:-none}" OPERATIONAL_EXPENSE CASH 2000); $(key_insert $t "repeat('s', 8)")"; echo $?)"
+done
+sess_c="$(sid $tenant_c 2026-11-01)"; sess_d="$(sid $tenant_d 2026-11-01)"
+check "each tenant sees exactly its own cash and the two ids differ" "$([ "$(app_sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_c'")" = 1 ] && [ "$(app_sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_d'")" = 1 ] && [ -n "$sess_c" ] && [ "$sess_c" != "$sess_d" ]; echo $?)"
+check "a query scoped to C never returns D's cash" "$([ "$(app_sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_c' and cash_session_id = '$sess_d'")" = 0 ]; echo $?)"
+check "a query scoped to D never returns C's cash" "$([ "$(app_sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_d' and cash_session_id = '$sess_c'")" = 0 ]; echo $?)"
+check "C holds 2 movements and none of them sits in D's session" "$([ "$(app_sql "select count(*) from $SCHEMA.cash_movement where tenant_id = '$tenant_c'")" = 2 ] && [ "$(app_sql "select count(*) from $SCHEMA.cash_movement where tenant_id = '$tenant_c' and cash_session_id = '$sess_d'")" = 0 ]; echo $?)"
+check "D holds 2 movements and none of them sits in C's session" "$([ "$(app_sql "select count(*) from $SCHEMA.cash_movement where tenant_id = '$tenant_d'")" = 2 ] && [ "$(app_sql "select count(*) from $SCHEMA.cash_movement where tenant_id = '$tenant_d' and cash_session_id = '$sess_c'")" = 0 ]; echo $?)"
+check "the same data on both sides: equal date, count and total" "$([ "$(app_sql "select count(distinct (s.business_date, m.n, m.total)) from $SCHEMA.cash_session s join (select tenant_id, count(*) n, sum(amount_cents) total from $SCHEMA.cash_movement group by tenant_id) m using (tenant_id) where s.tenant_id in ('$tenant_c', '$tenant_d')")" = 1 ]; echo $?)"
+check "the same idempotency key is held once by each tenant, each seeing only its own" "$([ "$(app_sql "select count(*) from $SCHEMA.idempotency_key where tenant_id = '$tenant_c' and key = repeat('s', 8)")" = 1 ] && [ "$(sql "select count(*) from $SCHEMA.idempotency_key where key = repeat('s', 8) and tenant_id in ('$tenant_c', '$tenant_d')")" = 2 ]; echo $?)"
+
+echo "AC-D1.19 - no business row can be deleted by the application user"
+check "the application holds exactly SELECT, INSERT, UPDATE on cash_session" "$([ "$(privs cash_reporting_app cash_session)" = "SELECT,INSERT,UPDATE" ]; echo $?)"
+for t in cash_session_closure cash_session_reopening cash_movement refund_movement; do
+  check "the application holds exactly SELECT, INSERT on $t" "$([ "$(privs cash_reporting_app $t)" = "SELECT,INSERT" ]; echo $?)"
+done
+for t in outbox_event idempotency_key; do
+  check "the application holds SELECT, INSERT, UPDATE, DELETE on $t and no more" "$([ "$(privs cash_reporting_app $t)" = "SELECT,INSERT,UPDATE,DELETE" ]; echo $?)"
+done
+before="$(business_rows)"
+for t in cash_session cash_session_closure cash_session_reopening cash_movement refund_movement; do
+  check "DELETE on $t by the application is refused" "$(app_refuses "delete from $SCHEMA.$t"; echo $?)"
+done
+check "no business row disappeared" "$([ "$(business_rows)" = "$before" ] && [ "$before" -gt 0 ]; echo $?)"
+check "UPDATE of a refund detail by the application is refused" "$(app_refuses "update $SCHEMA.refund_movement set reason = 'x'"; echo $?)"
+check "the application still closes and reopens a cash: UPDATE of cash_session is accepted" "$(app_ok "update $SCHEMA.cash_session set pending_closure = true where cash_session_id = '$sess_c'"; echo $?)"
+check "the technical tables accept deletion: a key is inserted and deleted by the application" "$(app_ok "$(key_insert $tenant_a "'delete-me-1'"); delete from $SCHEMA.idempotency_key where tenant_id = '$tenant_a' and key = 'delete-me-1'"; echo $?)"
+check "the key is gone" "$([ "$(sql "select count(*) from $SCHEMA.idempotency_key where key = 'delete-me-1'")" = 0 ]; echo $?)"
+check "the technical tables accept deletion: an event is inserted and deleted by the application" "$(app_ok "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'RefundExecuted', 'cccccccc-0000-4000-8000-000000000001', '{}', now()); delete from $SCHEMA.outbox_event where aggregate_id = 'cccccccc-0000-4000-8000-000000000001'"; echo $?)"
+check "the event is gone" "$([ "$(sql "select count(*) from $SCHEMA.outbox_event where aggregate_id = 'cccccccc-0000-4000-8000-000000000001'")" = 0 ]; echo $?)"
+for t in cash_session cash_session_closure cash_session_reopening cash_movement refund_movement; do
+  check "the reader holds only SELECT on $t" "$([ "$(privs cash_reporting_reader $t)" = SELECT ]; echo $?)"
+done
+check "the reader holds nothing on the two technical tables" "$([ "$(privs cash_reporting_reader outbox_event)" = none ] && [ "$(privs cash_reporting_reader idempotency_key)" = none ]; echo $?)"
+
+echo "AC-D1.20 - the five reads use their indexes"
+# The tables hold a handful of rows, so the planner would prefer a sequential scan whatever the indexes.
+# enable_seqscan and enable_bitmapscan are set off inside each probe: the plan then shows the index that serves the
+# read in its own order, and a Sort node would show an index that does not give the order the screen needs.
+plan() { app_sql "set enable_seqscan = off; set enable_bitmapscan = off; explain (costs off) $1"; }
+read_1="select * from $SCHEMA.cash_session where tenant_id = '$tenant_a' and business_date = '2026-09-01'"
+read_2="select * from $SCHEMA.cash_movement where tenant_id = '$tenant_a' and cash_session_id = '$sess_1' order by registered_at desc"
+read_3="select * from $SCHEMA.cash_session_closure where tenant_id = '$tenant_a' order by closed_at desc"
+read_4="select * from $SCHEMA.cash_session where tenant_id = '$tenant_a' and status = 'OPEN' order by business_date"
+read_5="select * from $SCHEMA.refund_movement where tenant_id = '$tenant_a' and reservation_id = 'dddddddd-0000-4000-8000-000000000001'"
+read_6="select * from $SCHEMA.outbox_event where status = 'PENDING' order by occurred_at limit 100"
+n=0
+for spec in "uq_cash_session_tenant_business_date|$read_1|the cash of a day" "idx_cash_movement_tenant_session_registered_at|$read_2|the movements of a session by time" "idx_cash_session_closure_tenant_closed_at|$read_3|the closures newest first" "idx_cash_session_tenant_open|$read_4|the open or pending sessions of a tenant" "idx_refund_movement_tenant_reservation|$read_5|the refunds of a reservation" "idx_outbox_event_pending|$read_6|the relay's pending events (declared exception to tenant first)"; do
+  n=$((n + 1)); idx="${spec%%|*}"; rest="${spec#*|}"; q="${rest%%|*}"; what="${rest#*|}"
+  p="$(plan "$q" || true)"; echo "$p" | sed 's/^/        /'
+  check "read $n, $what, uses $idx" "$(case "$p" in *"$idx"*) echo 0 ;; *) echo 1 ;; esac)"
+  check "read $n needs no Sort node: the index gives the order" "$(case "$p" in *Sort*) echo 1 ;; *) echo 0 ;; esac)"
+done
+check "the six indexes of the plan exist and no other idx_ index does" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 6 ]; echo $?)"
+check "the reopening key index is idx_cash_session_reopening_tenant_session_reopened_at" "$([ "$(sql "select indexdef from pg_indexes where schemaname = '$SCHEMA' and indexname = 'idx_cash_session_reopening_tenant_session_reopened_at'" | grep -c '(tenant_id, cash_session_id, reopened_at)')" = 1 ]; echo $?)"
+check "the open index is partial on OPEN and the outbox index is partial on PENDING" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and ((indexname = 'idx_cash_session_tenant_open' and indexdef like '%(tenant_id, business_date)%' and indexdef like '%status%OPEN%') or (indexname = 'idx_outbox_event_pending' and indexdef like '%(status, occurred_at)%' and indexdef like '%status%PENDING%'))")" = 2 ]; echo $?)"
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"
 pending="$(liquibase status 2>&1 | grep -c 'have not been applied' || true)"
 check "status reports no pending changeset" "$([ "$(liquibase status 2>&1 | grep -ci 'up to date')" -ge 1 ]; echo $?)"
 
-echo "step 3 - rollback leaves nothing (AC-D1.22)"
+echo "AC-D1.22 - rollback leaves nothing and the tree rebuilds (step 3, rollback-count 999)"
 liquibase rollback-count 999 >/dev/null
 check "the schema holds no object" "$([ "$(leftovers)" = 0 ]; echo $?)"
 check "the domain roles are gone" "$([ "$(domain_roles)" = 0 ]; echo $?)"
 check "the control table holds no changeset" "$([ "$(applied)" = 0 ]; echo $?)"
 
-echo "step 4 - the tree rebuilds"
+echo "AC-D1.22 - the tree rebuilds (step 4)"
 liquibase update >/dev/null
 check "the rebuild applies the same changesets" "$([ "$(applied)" = "$first" ]; echo $?)"
+check "the rebuilt tree has its six indexes again" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 6 ]; echo $?)"
+check "the rebuilt tree has its grants again: DELETE on a movement is still refused" "$([ "$(privs cash_reporting_app cash_movement)" = "SELECT,INSERT" ] && app_refuses "delete from $SCHEMA.cash_movement"; echo $?)"
 
 [ "$fail" -eq 0 ] && echo "db-ci: all checks passed" || { echo "db-ci: FAILED"; exit 1; }
