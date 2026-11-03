@@ -215,8 +215,8 @@ check "a closure of another tenant's session is refused by fk_cash_session_closu
 check "a closure of a session that does not exist is refused by fk_cash_session_closure_cash_session" "$(refused "$(closure_sql $tenant_a 00000000-0000-4000-8000-000000000000)" fk_cash_session_closure_cash_session; echo $?)"
 
 # WAITING for T-07: the grants changeset (plan D-10) gives the application SELECT and INSERT only.
-# Until then the probe is written but not counted. Flip T07_GRANTS to 1 in the T-07 PR.
-T07_GRANTS=0
+# T07_GRANTS=1 since the T-07 PR: the probes below are counted.
+T07_GRANTS=1
 echo "AC-D1.8 - a closure is never updated or deleted by the application"
 if [ "$T07_GRANTS" = 1 ]; then
   check "UPDATE of a closure by the application is refused" "$(app_refuses "update $SCHEMA.cash_session_closure set income_cents = 0"; echo $?)"
