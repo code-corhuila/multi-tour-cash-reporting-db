@@ -78,3 +78,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/005_create_cash_session_reopening.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-006
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_movement: a money fact with a positive amount, the type giving the direction, the after-closing mark only on a transfer, tenant-first key to the session (AC-D1.10 to AC-D1.12, RN-CAJ-001, GAP-013, CA-016)."
+      changes:
+        - sqlFile:
+            path: 006_create_cash_movement.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/006_create_cash_movement.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
