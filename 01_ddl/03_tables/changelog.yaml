@@ -93,3 +93,33 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/006_create_cash_movement.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-007
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_movement: the unique target of the refund detail's composite key, before the detail exists (AC-D1.14, CR-05)."
+      changes:
+        - sqlFile:
+            path: 007_add_cash_movement_refund_target.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/007_add_cash_movement_refund_target.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-008
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "refund_movement: one detail per refund movement, agreeing with it by composite key, with plain ids of domain 2 and no key to them (AC-D1.14, AC-D1.15, RN-CAJ-001, CR-05, CR-08)."
+      changes:
+        - sqlFile:
+            path: 008_create_refund_movement.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/008_create_refund_movement.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
