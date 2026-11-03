@@ -295,6 +295,57 @@ else
   echo "  WAIT  a movement has no UPDATE or DELETE for the application: waits for the grants changeset of T-07 (not counted)"
 fi
 
+# T-06. The refund detail. Probes run as the owner: they judge constraints, not grants (T-07).
+# Movements with known ids so that the details can point at them; each detail is tried against its own.
+mv_m1="aaaaaaaa-0000-4000-8000-000000000001"  # refund, cash, 40000
+mv_m2="aaaaaaaa-0000-4000-8000-000000000002"  # refund, transfer, 50000
+mv_m3="aaaaaaaa-0000-4000-8000-000000000003"  # income, cash, 40000 (not a refund)
+mv_m4="aaaaaaaa-0000-4000-8000-000000000004"  # refund, cash, 20000
+mv_m5="aaaaaaaa-0000-4000-8000-000000000005"  # refund, cash, 10000
+for spec in "$mv_m1 REFUND CASH 40000" "$mv_m2 REFUND TRANSFER 50000" "$mv_m3 INCOME CASH 40000" "$mv_m4 REFUND CASH 20000" "$mv_m5 REFUND CASH 10000"; do
+  set -- $spec
+  sql "$(mv_sql $tenant_a $sess_1 $2 $3 $4 cash_movement_id "'$1'")" >/dev/null
+done
+# rf_sql tenant session movement amount method [authorization]
+rf_sql() {
+  echo "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, executed_by, outflow_method, executed_at) values ('$1', '$2', '$3', ${6:-gen_random_uuid()}, gen_random_uuid(), $4, 'customer cancelled', gen_random_uuid(), '$5', now())"
+}
+rf_cols() { sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'refund_movement'"; }
+
+echo "AC-D1.14 - a refund agrees with its cash movement"
+check "the refund detail holds the 12 columns of the model" "$([ "$(rf_cols)" = 12 ]; echo $?)"
+check "the detail type is generated and stored as REFUND" "$([ "$(sql "select is_generated || '/' || generation_expression from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'refund_movement' and column_name = 'movement_type'")" = "ALWAYS/'REFUND'::text" ]; echo $?)"
+check "a refund that agrees with its movement is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m1 40000 CASH)" >/dev/null 2>&1; echo $?)"
+check "a refund by transfer that agrees with its movement is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m2 50000 TRANSFER)" >/dev/null 2>&1; echo $?)"
+check "a different amount is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20001 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a different medium is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 TRANSFER)" fk_refund_movement_cash_movement; echo $?)"
+check "a movement not of type refund is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m3 40000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a movement that does not exist is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 00000000-0000-4000-8000-000000000000 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "another tenant's detail over the movement is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_b $sess_1 $mv_m4 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "another session's detail over the movement is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_2 $mv_m4 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a second detail for one movement is refused by uq_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m1 40000 CASH)" uq_refund_movement_cash_movement; echo $?)"
+check "the movement keeps its target unique for the composite key" "$([ "$(sql "select count(*) from pg_constraint where conname = 'uq_cash_movement_refund_target' and contype = 'u' and conrelid = '$SCHEMA.cash_movement'::regclass")" = 1 ]; echo $?)"
+check "an outflow method outside the list is refused by chk_refund_movement_outflow_method" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CARD)" chk_refund_movement_outflow_method; echo $?)"
+check "a blank reason is refused by chk_refund_movement_reason_not_blank" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'customer cancelled'/'   '/")" chk_refund_movement_reason_not_blank; echo $?)"
+check "a null reason is refused by chk_refund_movement_reason_not_blank" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'customer cancelled'/null/")" chk_refund_movement_reason_not_blank; echo $?)"
+check "a detail without reservation is refused by chk_refund_movement_reservation_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/, gen_random_uuid(), 20000/, null, 20000/")" chk_refund_movement_reservation_required; echo $?)"
+check "a detail without authorization is refused by chk_refund_movement_refund_authorization_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH null)" chk_refund_movement_refund_authorization_required; echo $?)"
+check "a detail without executing user is refused by chk_refund_movement_executed_by_required" "$(refused "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, outflow_method, executed_at) values ('$tenant_a', '$sess_1', '$mv_m4', gen_random_uuid(), gen_random_uuid(), 20000, 'customer cancelled', 'CASH', now())" chk_refund_movement_executed_by_required; echo $?)"
+check "a detail without time is refused by chk_refund_movement_executed_at_required" "$(refused "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, executed_by, outflow_method) values ('$tenant_a', '$sess_1', '$mv_m4', gen_random_uuid(), gen_random_uuid(), 20000, 'customer cancelled', gen_random_uuid(), 'CASH')" chk_refund_movement_executed_at_required; echo $?)"
+check "a detail without amount is refused by chk_refund_movement_amount_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 null CASH)" chk_refund_movement_amount_required; echo $?)"
+check "a detail without tenant is refused by chk_refund_movement_tenant_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/values ('$tenant_a'/values (null/")" chk_refund_movement_tenant_required; echo $?)"
+check "a detail without session is refused by chk_refund_movement_cash_session_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'$sess_1'/null/")" chk_refund_movement_cash_session_required; echo $?)"
+check "a detail without movement is refused by chk_refund_movement_cash_movement_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'$mv_m4'/null/")" chk_refund_movement_cash_movement_required; echo $?)"
+check "the stored detail type is REFUND" "$([ "$(sql "select count(*) from $SCHEMA.refund_movement where movement_type = 'REFUND'")" = 2 ]; echo $?)"
+
+echo "AC-D1.15 - cross-domain ids are plain columns"
+check "reservation and authorization carry no foreign key: the only key of the detail is the movement's" "$([ "$(sql "select string_agg(conname, ',' order by conname) from pg_constraint where conrelid = '$SCHEMA.refund_movement'::regclass and contype = 'f'")" = fk_refund_movement_cash_movement ]; echo $?)"
+check "no foreign key of the detail leaves the domain schema" "$([ "$(sql "select count(*) from pg_constraint c join pg_class t on t.oid = c.confrelid join pg_namespace n on n.oid = t.relnamespace where c.conrelid = '$SCHEMA.refund_movement'::regclass and c.contype = 'f' and n.nspname <> '$SCHEMA'")" = 0 ]; echo $?)"
+auth_x="bbbbbbbb-0000-4000-8000-000000000001"
+check "a first detail of an authorization that exists nowhere in this database is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH "'$auth_x'")" >/dev/null 2>&1; echo $?)"
+check "a second detail of the same authorization is accepted (partial executions)" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m5 10000 CASH "'$auth_x'")" >/dev/null 2>&1; echo $?)"
+check "the two details share the authorization" "$([ "$(sql "select count(*) from $SCHEMA.refund_movement where refund_authorization_id = '$auth_x'")" = 2 ]; echo $?)"
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"
