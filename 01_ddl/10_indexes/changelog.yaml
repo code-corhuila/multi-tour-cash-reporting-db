@@ -1,2 +1,91 @@
-# Empty on purpose: every folder carries its changelog from day one, so the execution order is fixed.
-databaseChangeLog: []
+databaseChangeLog:
+  - changeSet:
+      id: ddl-indexes-001
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_cash_session_tenant_open: the open and pending sessions of a tenant, partial on OPEN (AC-D1.20)."
+      changes:
+        - sqlFile:
+            path: 001_create_idx_cash_session_tenant_open.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/001_create_idx_cash_session_tenant_open.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-indexes-002
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_cash_movement_tenant_session_registered_at: the movements of a session newest first (AC-D1.20)."
+      changes:
+        - sqlFile:
+            path: 002_create_idx_cash_movement_tenant_session_registered_at.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/002_create_idx_cash_movement_tenant_session_registered_at.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-indexes-003
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_cash_session_closure_tenant_closed_at: the closing history of a tenant newest first (AC-D1.20)."
+      changes:
+        - sqlFile:
+            path: 003_create_idx_cash_session_closure_tenant_closed_at.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/003_create_idx_cash_session_closure_tenant_closed_at.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-indexes-004
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_cash_session_reopening_tenant_session_reopened_at: the reopenings of a session in time order."
+      changes:
+        - sqlFile:
+            path: 004_create_idx_cash_session_reopening_tenant_session_reopened_at.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/004_create_idx_cash_session_reopening_tenant_session_reopened_at.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-indexes-005
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_refund_movement_tenant_reservation: the refunds of a reservation (AC-D1.20)."
+      changes:
+        - sqlFile:
+            path: 005_create_idx_refund_movement_tenant_reservation.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/005_create_idx_refund_movement_tenant_reservation.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-indexes-006
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_outbox_event_pending: the relay's pending events by occurrence, the declared exception to tenant first (RNF-D1.1)."
+      changes:
+        - sqlFile:
+            path: 006_create_idx_outbox_event_pending.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/006_create_idx_outbox_event_pending.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
