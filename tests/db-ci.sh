@@ -250,10 +250,10 @@ check "only the two accepted reopenings exist" "$([ "$(sql "select count(*) from
 
 # T-05. The movements. Probes run as the owner: they judge constraints, not grants (T-07).
 # Whether the cash had its opening is not checked here: it is DD-4, the -api's guard.
-MV_COLS="tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, registered_by"
+MV_COLS="tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, registered_by, concept"
 # mv_sql tenant session type medium amount [extra-column extra-value]
 mv_sql() {
-  echo "insert into $SCHEMA.cash_movement ($MV_COLS${6:+, $6}) values ('$1', '$2', '$3', '$4', $5, now(), gen_random_uuid()${7:+, $7})"
+  echo "insert into $SCHEMA.cash_movement ($MV_COLS${6:+, $6}) values ('$1', '$2', '$3', '$4', $5, now(), gen_random_uuid(), 'daily sale'${7:+, $7})"
 }
 
 echo "AC-D1.10 - a cash movement without its required columns or with a bad amount is refused"
@@ -261,7 +261,7 @@ check "an income in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME 
 check "an operational payment by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_PAYMENT TRANSFER 100000)" >/dev/null 2>&1; echo $?)"
 check "an operational expense in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH 50000)" >/dev/null 2>&1; echo $?)"
 check "a refund by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 REFUND TRANSFER 30000)" >/dev/null 2>&1; echo $?)"
-check "the movement holds the 9 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 9 ]; echo $?)"
+check "the movement holds the 10 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 10 ]; echo $?)"
 check "the amount is bigint cents" "$([ "$(sql "select data_type from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement' and column_name = 'amount_cents'")" = bigint ]; echo $?)"
 check "an amount of zero is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 0)" chk_cash_movement_amount_positive; echo $?)"
 check "a negative amount is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH -1)" chk_cash_movement_amount_positive; echo $?)"
@@ -272,8 +272,8 @@ check "a medium outside the list is refused by chk_cash_movement_payment_medium"
 check "a null medium is refused by chk_cash_movement_payment_medium" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'CASH'/null/")" chk_cash_movement_payment_medium; echo $?)"
 check "a movement without tenant is refused by chk_cash_movement_tenant_required" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/values ('$tenant_a'/values (null/")" chk_cash_movement_tenant_required; echo $?)"
 check "a movement without session is refused by chk_cash_movement_cash_session_required" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'$sess_1'/null/")" chk_cash_movement_cash_session_required; echo $?)"
-check "a movement without time is refused by chk_cash_movement_registered_at_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_by) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, gen_random_uuid())" chk_cash_movement_registered_at_required; echo $?)"
-check "a movement without user is refused by chk_cash_movement_registered_by_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, now())" chk_cash_movement_registered_by_required; echo $?)"
+check "a movement without time is refused by chk_cash_movement_registered_at_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_by, concept) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, gen_random_uuid(), 'daily sale')" chk_cash_movement_registered_at_required; echo $?)"
+check "a movement without user is refused by chk_cash_movement_registered_by_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, concept) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, now(), 'daily sale')" chk_cash_movement_registered_by_required; echo $?)"
 check "the after-closing mark starts false" "$([ "$(sql "select count(*) from $SCHEMA.cash_movement where after_closing")" = 0 ]; echo $?)"
 
 echo "AC-D1.11 - only a transfer can be marked after closing"
