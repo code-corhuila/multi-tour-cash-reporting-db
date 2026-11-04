@@ -1,0 +1,1 @@
+DROP INDEX cash_reporting.idx_outbox_event_pending;

@@ -29,3 +29,33 @@ databaseChangeLog:
             path: ../../05_rollbacks/03_dcl/01_grants/002_grant_writer_to_application_user.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: dcl-grants-003
+      author: FernandaRobayo
+      labels: "HU-CSH-001,dcl,grants"
+      comment: "Writer: SELECT and INSERT on the business tables, UPDATE only on cash_session, all four on the two technical tables (AC-D1.8, AC-D1.13, AC-D1.19)."
+      changes:
+        - sqlFile:
+            path: 003_grant_writer_table_privileges.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/003_grant_writer_table_privileges.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: dcl-grants-004
+      author: FernandaRobayo
+      labels: "HU-CSH-001,dcl,grants"
+      comment: "Reader: SELECT on the five business tables and nothing else."
+      changes:
+        - sqlFile:
+            path: 004_grant_reader_select.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/004_grant_reader_select.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

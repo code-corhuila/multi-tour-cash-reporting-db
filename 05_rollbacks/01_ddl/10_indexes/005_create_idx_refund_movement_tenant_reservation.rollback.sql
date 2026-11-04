@@ -1,0 +1,1 @@
+DROP INDEX cash_reporting.idx_refund_movement_tenant_reservation;
