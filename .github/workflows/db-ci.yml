@@ -1,0 +1,24 @@
+name: db-ci
+
+# The four steps of Annex A against an empty PostgreSQL. Pull requests toward develop and qa only,
+# as the course asks to save automation minutes. No schedule and no manual trigger.
+on:
+  pull_request:
+    branches: [develop, qa]
+
+concurrency:
+  group: db-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, rebuild, roll back and rebuild (Annex A)
+        run: bash tests/db-ci.sh
