@@ -1,0 +1,1 @@
+REVOKE cash_reporting_writer FROM cash_reporting_app;
