@@ -173,6 +173,179 @@ check "the mark without opening is refused by chk_cash_session_pending_closure" 
 check "the mark on a closed session is refused by chk_cash_session_pending_closure" "$(refused "$(sess "$CLOSED_COLS, $OPEN_COLS, pending_closure" "$(s_vals $tenant_a 2026-09-11 OPERATIONAL_OPENING), 'CLOSED', now(), 'FORMAL', 0, gen_random_uuid(), $OPEN_VALS, true")" chk_cash_session_pending_closure; echo $?)"
 check "the mark is not a status: PENDING_CLOSURE is refused as status" "$(refused "$(sess "$S_COLS, status" "$(s_vals $tenant_a 2026-09-11), 'PENDING_CLOSURE'")" chk_cash_session_status; echo $?)"
 
+# T-04. The closure snapshot and the reopening. Probes run as the owner: they judge constraints.
+# DP-D1-1 (PROPUESTO default): cash_session_closure is an immutable snapshot of each closing.
+sid() { sql "select cash_session_id from $SCHEMA.cash_session where tenant_id = '$1' and business_date = '$2'"; }
+for d in 2026-10-01 2026-10-02; do
+  sql "$(sess "$CLOSED_COLS, $OPEN_COLS" "$(s_vals $tenant_a $d OPERATIONAL_OPENING), 'CLOSED', now(), 'FORMAL', 1120000, gen_random_uuid(), $OPEN_VALS")" >/dev/null
+done
+sql "$(sess "$CLOSED_COLS, $OPEN_COLS" "$(s_vals $tenant_b 2026-10-01 OPERATIONAL_OPENING), 'CLOSED', now(), 'FORMAL', 1120000, gen_random_uuid(), $OPEN_VALS")" >/dev/null
+sess_1="$(sid $tenant_a 2026-10-01)"; sess_2="$(sid $tenant_a 2026-10-02)"; sess_b="$(sid $tenant_b 2026-10-01)"
+CL_COLS="tenant_id, cash_session_id, closed_at, closing_mode, closed_by, opening_base_cents, income_cents, operational_payments_cents, operational_expenses_cents, refunds_cents, cash_entries_cents, transfer_entries_cents, cash_exits_cents, transfer_exits_cents, expected_cash_cents, closing_balance_cents"
+dv() { if [ "$1" = D ]; then echo "$2"; else echo "$1"; fi; }  # D means the default of the valid closure
+# closure_sql tenant session mode closed_by base income cash_in transfer_in cash_out transfer_out expected balance
+# valid default: base 300000, income 1000000 (700000 cash + 300000 transfer), payments 100000,
+# expenses 50000, refunds 30000 (exits 150000 cash + 30000 transfer), expected 850000, balance 1120000
+closure_sql() {
+  echo "insert into $SCHEMA.cash_session_closure ($CL_COLS) values ('$1', '$2', now(), '$(dv "${3:-D}" FORMAL)', $(dv "${4:-D}" "gen_random_uuid()"), $(dv "${5:-D}" 300000), $(dv "${6:-D}" 1000000), 100000, 50000, 30000, $(dv "${7:-D}" 700000), $(dv "${8:-D}" 300000), $(dv "${9:-D}" 150000), $(dv "${10:-D}" 30000), $(dv "${11:-D}" 850000), $(dv "${12:-D}" 1120000))"
+}
+
+echo "AC-D1.8 - a closure keeps its values and agrees with the formula"
+check "a closure that agrees with the formula is accepted" "$(sql "$(closure_sql $tenant_a $sess_1)" >/dev/null 2>&1; echo $?)"
+check "a second closure of the same session is accepted (the history is kept)" "$(sql "$(closure_sql $tenant_a $sess_1)" >/dev/null 2>&1; echo $?)"
+check "a closure of a never opened session (no base, no expected cash) is accepted" "$(sql "$(closure_sql $tenant_a $sess_2 AUTOMATIC null null 0 0 0 0 0 null 0 | sed 's/, 100000, 50000, 30000,/, 0, 0, 0,/')" >/dev/null 2>&1; echo $?)"
+check "the closure holds the 17 columns of plan D-04" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_session_closure'")" = 17 ]; echo $?)"
+check "a wrong closing balance is refused by chk_cash_session_closure_balance" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D D D D D D 1120001)" chk_cash_session_closure_balance; echo $?)"
+check "entries by medium that do not add up to income are refused by chk_cash_session_closure_entries_by_medium" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D 700001 D D D 850001)" chk_cash_session_closure_entries_by_medium; echo $?)"
+check "exits by medium that do not add up are refused by chk_cash_session_closure_exits_by_medium" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D D D 150001 D 849999)" chk_cash_session_closure_exits_by_medium; echo $?)"
+check "a wrong expected cash is refused by chk_cash_session_closure_expected_cash" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D D D D D 850001)" chk_cash_session_closure_expected_cash; echo $?)"
+check "expected cash without a base is refused by chk_cash_session_closure_expected_cash" "$(refused "$(closure_sql $tenant_a $sess_1 D D null D D D D D D 820000)" chk_cash_session_closure_expected_cash; echo $?)"
+check "a base without expected cash is refused by chk_cash_session_closure_expected_cash" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D D D D D null)" chk_cash_session_closure_expected_cash; echo $?)"
+check "a negative amount is refused by chk_cash_session_closure_amounts_nonnegative" "$(refused "$(closure_sql $tenant_a $sess_1 D D D D D -1 D D D D)" chk_cash_session_closure_amounts_nonnegative; echo $?)"
+check "a negative closing balance that agrees with the formula is accepted" "$(sql "$(closure_sql $tenant_a $sess_1 D D 0 0 0 0 150000 30000 -150000 -180000)" >/dev/null 2>&1; echo $?)"
+check "a formal closure without user is refused by chk_cash_session_closure_closed_by" "$(refused "$(closure_sql $tenant_a $sess_1 FORMAL null)" chk_cash_session_closure_closed_by; echo $?)"
+check "an automatic closure with a user is refused by chk_cash_session_closure_closed_by" "$(refused "$(closure_sql $tenant_a $sess_1 AUTOMATIC D)" chk_cash_session_closure_closed_by; echo $?)"
+check "a closing mode outside the list is refused by chk_cash_session_closure_closing_mode" "$(refused "$(closure_sql $tenant_a $sess_1 MANUAL)" chk_cash_session_closure_closing_mode; echo $?)"
+check "a closure without tenant is refused by chk_cash_session_closure_tenant_required" "$(refused "$(closure_sql $tenant_a $sess_1 | sed "s/values ('$tenant_a'/values (null/")" chk_cash_session_closure_tenant_required; echo $?)"
+check "a closure of another tenant's session is refused by fk_cash_session_closure_cash_session" "$(refused "$(closure_sql $tenant_b $sess_1)" fk_cash_session_closure_cash_session; echo $?)"
+check "a closure of a session that does not exist is refused by fk_cash_session_closure_cash_session" "$(refused "$(closure_sql $tenant_a 00000000-0000-4000-8000-000000000000)" fk_cash_session_closure_cash_session; echo $?)"
+
+# WAITING for T-07: the grants changeset (plan D-10) gives the application SELECT and INSERT only.
+# Until then the probe is written but not counted. Flip T07_GRANTS to 1 in the T-07 PR.
+T07_GRANTS=0
+echo "AC-D1.8 - a closure is never updated or deleted by the application"
+if [ "$T07_GRANTS" = 1 ]; then
+  app_refuses() { out="$(docker exec -e PGPASSWORD "$container" psql -U postgres -d postgres -tAc "set role cash_reporting_app; $1" 2>&1 || true)"; case "$out" in *"permission denied"*) return 0 ;; *) return 1 ;; esac; }
+  check "UPDATE of a closure by the application is refused" "$(app_refuses "update $SCHEMA.cash_session_closure set income_cents = 0"; echo $?)"
+  check "DELETE of a closure by the application is refused" "$(app_refuses "delete from $SCHEMA.cash_session_closure"; echo $?)"
+  check "UPDATE of a reopening by the application is refused" "$(app_refuses "update $SCHEMA.cash_session_reopening set reason = 'x'"; echo $?)"
+  check "DELETE of a reopening by the application is refused" "$(app_refuses "delete from $SCHEMA.cash_session_reopening"; echo $?)"
+else
+  echo "  WAIT  closure and reopening have no UPDATE or DELETE for the application: waits for the grants changeset of T-07 (not counted)"
+fi
+
+echo "AC-D1.9 - a reopening keeps reason user time and the closure"
+cl_1="$(sql "select cash_session_closure_id from $SCHEMA.cash_session_closure where cash_session_id = '$sess_1' order by cash_session_closure_id limit 1" 2>/dev/null || true)"
+cl_2="$(sql "select cash_session_closure_id from $SCHEMA.cash_session_closure where cash_session_id = '$sess_1' and cash_session_closure_id <> '$cl_1' order by cash_session_closure_id limit 1" 2>/dev/null || true)"
+cl_s2="$(sql "select cash_session_closure_id from $SCHEMA.cash_session_closure where cash_session_id = '$sess_2' limit 1" 2>/dev/null || true)"
+check "the closures to reopen exist" "$([ -n "$cl_1" ] && [ -n "$cl_2" ] && [ -n "$cl_s2" ]; echo $?)"
+reop_sql() { # tenant session closure reason-literal
+  echo "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reopened_at, reason) values ('$1', '$2', '$3', gen_random_uuid(), now(), $4)"
+}
+check "a reopening with reason user time and its closure is accepted" "$(sql "$(reop_sql $tenant_a $sess_1 "${cl_1:-none}" "'wrong count'")" >/dev/null 2>&1; echo $?)"
+check "a second reopening of the same session over another closure is accepted" "$(sql "$(reop_sql $tenant_a $sess_1 "${cl_2:-none}" "'late transfer'")" >/dev/null 2>&1; echo $?)"
+check "the two reopenings belong to one session" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_reopening where cash_session_id = '$sess_1'")" = 2 ]; echo $?)"
+check "no second cash was created by the reopenings" "$([ "$(sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_a' and business_date = '2026-10-01'")" = 1 ]; echo $?)"
+check "a second reopening of the same closure is refused by uq_cash_session_reopening_closure" "$(refused "$(reop_sql $tenant_a $sess_1 "${cl_1:-none}" "'again'")" uq_cash_session_reopening_closure; echo $?)"
+check "a blank reason is refused by chk_cash_session_reopening_reason_not_blank" "$(refused "$(reop_sql $tenant_a $sess_2 "${cl_s2:-none}" "'   '")" chk_cash_session_reopening_reason_not_blank; echo $?)"
+check "a null reason is refused by chk_cash_session_reopening_reason_not_blank" "$(refused "$(reop_sql $tenant_a $sess_2 "${cl_s2:-none}" null)" chk_cash_session_reopening_reason_not_blank; echo $?)"
+check "a reopening that names a closure of another session is refused by fk_cash_session_reopening_closure" "$(refused "$(reop_sql $tenant_a $sess_1 "${cl_s2:-none}" "'wrong closure'")" fk_cash_session_reopening_closure; echo $?)"
+check "a reopening of another tenant over this closure is refused by fk_cash_session_reopening_closure" "$(refused "$(reop_sql $tenant_b $sess_b "${cl_s2:-none}" "'other tenant'")" fk_cash_session_reopening_closure; echo $?)"
+check "a reopening without user is refused by chk_cash_session_reopening_reopened_by_required" "$(refused "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_at, reason) values ('$tenant_a', '$sess_2', '$cl_s2', now(), 'x')" chk_cash_session_reopening_reopened_by_required; echo $?)"
+check "a reopening without time is refused by chk_cash_session_reopening_reopened_at_required" "$(refused "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reason) values ('$tenant_a', '$sess_2', '$cl_s2', gen_random_uuid(), 'x')" chk_cash_session_reopening_reopened_at_required; echo $?)"
+check "only the two accepted reopenings exist" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_reopening")" = 2 ]; echo $?)"
+
+# T-05. The movements. Probes run as the owner: they judge constraints, not grants (T-07).
+# Whether the cash had its opening is not checked here: it is DD-4, the -api's guard.
+MV_COLS="tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, registered_by"
+# mv_sql tenant session type medium amount [extra-column extra-value]
+mv_sql() {
+  echo "insert into $SCHEMA.cash_movement ($MV_COLS${6:+, $6}) values ('$1', '$2', '$3', '$4', $5, now(), gen_random_uuid()${7:+, $7})"
+}
+
+echo "AC-D1.10 - a cash movement without its required columns or with a bad amount is refused"
+check "an income in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME CASH 250000)" >/dev/null 2>&1; echo $?)"
+check "an operational payment by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_PAYMENT TRANSFER 100000)" >/dev/null 2>&1; echo $?)"
+check "an operational expense in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH 50000)" >/dev/null 2>&1; echo $?)"
+check "a refund by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 REFUND TRANSFER 30000)" >/dev/null 2>&1; echo $?)"
+check "the movement holds the 9 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 9 ]; echo $?)"
+check "the amount is bigint cents" "$([ "$(sql "select data_type from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement' and column_name = 'amount_cents'")" = bigint ]; echo $?)"
+check "an amount of zero is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 0)" chk_cash_movement_amount_positive; echo $?)"
+check "a negative amount is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH -1)" chk_cash_movement_amount_positive; echo $?)"
+check "a null amount is refused by chk_cash_movement_amount_required" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH null)" chk_cash_movement_amount_required; echo $?)"
+check "a type outside the list is refused by chk_cash_movement_type" "$(refused "$(mv_sql $tenant_a $sess_1 DONATION CASH 1000)" chk_cash_movement_type; echo $?)"
+check "a null type is refused by chk_cash_movement_type" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'INCOME'/null/")" chk_cash_movement_type; echo $?)"
+check "a medium outside the list is refused by chk_cash_movement_payment_medium" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CARD 1000)" chk_cash_movement_payment_medium; echo $?)"
+check "a null medium is refused by chk_cash_movement_payment_medium" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'CASH'/null/")" chk_cash_movement_payment_medium; echo $?)"
+check "a movement without tenant is refused by chk_cash_movement_tenant_required" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/values ('$tenant_a'/values (null/")" chk_cash_movement_tenant_required; echo $?)"
+check "a movement without session is refused by chk_cash_movement_cash_session_required" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 1000 | sed "s/'$sess_1'/null/")" chk_cash_movement_cash_session_required; echo $?)"
+check "a movement without time is refused by chk_cash_movement_registered_at_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_by) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, gen_random_uuid())" chk_cash_movement_registered_at_required; echo $?)"
+check "a movement without user is refused by chk_cash_movement_registered_by_required" "$(refused "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at) values ('$tenant_a', '$sess_1', 'INCOME', 'CASH', 1000, now())" chk_cash_movement_registered_by_required; echo $?)"
+check "the after-closing mark starts false" "$([ "$(sql "select count(*) from $SCHEMA.cash_movement where after_closing")" = 0 ]; echo $?)"
+
+echo "AC-D1.11 - only a transfer can be marked after closing"
+check "a transfer marked after closing is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME TRANSFER 80000 after_closing true)" >/dev/null 2>&1; echo $?)"
+check "a cash movement marked after closing is refused by chk_cash_movement_after_closing_transfer_only" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 80000 after_closing true)" chk_cash_movement_after_closing_transfer_only; echo $?)"
+check "a cash payment marked after closing is refused by chk_cash_movement_after_closing_transfer_only" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_PAYMENT CASH 80000 after_closing true)" chk_cash_movement_after_closing_transfer_only; echo $?)"
+check "a cash movement not marked is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME CASH 80000 after_closing false)" >/dev/null 2>&1; echo $?)"
+
+echo "AC-D1.12 - a movement cannot point at another tenant's session"
+check "a movement of tenant B over tenant A's session is refused by fk_cash_movement_cash_session" "$(refused "$(mv_sql $tenant_b $sess_1 INCOME CASH 1000)" fk_cash_movement_cash_session; echo $?)"
+check "a movement of tenant B over its own session is accepted" "$(sql "$(mv_sql $tenant_b $sess_b INCOME CASH 1000)" >/dev/null 2>&1; echo $?)"
+check "a movement of a session that does not exist is refused by fk_cash_movement_cash_session" "$(refused "$(mv_sql $tenant_a 00000000-0000-4000-8000-000000000000 INCOME CASH 1000)" fk_cash_movement_cash_session; echo $?)"
+check "a movement over a session never opened is accepted here (DD-4: the -api guards the opening)" "$(sql "$(mv_sql $tenant_a $sess_2 INCOME CASH 1000)" >/dev/null 2>&1; echo $?)"
+
+# WAITING for T-07, same flag as the closure probe above: the grants changeset gives the application
+# SELECT and INSERT only on cash_movement. Written now, not counted until T07_GRANTS is flipped to 1.
+echo "AC-D1.13 - a movement cannot be updated or deleted by the application"
+if [ "$T07_GRANTS" = 1 ]; then
+  check "UPDATE of a movement by the application is refused" "$(app_refuses "update $SCHEMA.cash_movement set amount_cents = 1"; echo $?)"
+  check "DELETE of a movement by the application is refused" "$(app_refuses "delete from $SCHEMA.cash_movement"; echo $?)"
+else
+  echo "  WAIT  a movement has no UPDATE or DELETE for the application: waits for the grants changeset of T-07 (not counted)"
+fi
+
+# T-06. The refund detail. Probes run as the owner: they judge constraints, not grants (T-07).
+# Movements with known ids so that the details can point at them; each detail is tried against its own.
+mv_m1="aaaaaaaa-0000-4000-8000-000000000001"  # refund, cash, 40000
+mv_m2="aaaaaaaa-0000-4000-8000-000000000002"  # refund, transfer, 50000
+mv_m3="aaaaaaaa-0000-4000-8000-000000000003"  # income, cash, 40000 (not a refund)
+mv_m4="aaaaaaaa-0000-4000-8000-000000000004"  # refund, cash, 20000
+mv_m5="aaaaaaaa-0000-4000-8000-000000000005"  # refund, cash, 10000
+for spec in "$mv_m1 REFUND CASH 40000" "$mv_m2 REFUND TRANSFER 50000" "$mv_m3 INCOME CASH 40000" "$mv_m4 REFUND CASH 20000" "$mv_m5 REFUND CASH 10000"; do
+  set -- $spec
+  sql "$(mv_sql $tenant_a $sess_1 $2 $3 $4 cash_movement_id "'$1'")" >/dev/null
+done
+# rf_sql tenant session movement amount method [authorization]
+rf_sql() {
+  echo "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, executed_by, outflow_method, executed_at) values ('$1', '$2', '$3', ${6:-gen_random_uuid()}, gen_random_uuid(), $4, 'customer cancelled', gen_random_uuid(), '$5', now())"
+}
+rf_cols() { sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'refund_movement'"; }
+
+echo "AC-D1.14 - a refund agrees with its cash movement"
+check "the refund detail holds the 12 columns of the model" "$([ "$(rf_cols)" = 12 ]; echo $?)"
+check "the detail type is generated and stored as REFUND" "$([ "$(sql "select is_generated || '/' || generation_expression from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'refund_movement' and column_name = 'movement_type'")" = "ALWAYS/'REFUND'::text" ]; echo $?)"
+check "a refund that agrees with its movement is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m1 40000 CASH)" >/dev/null 2>&1; echo $?)"
+check "a refund by transfer that agrees with its movement is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m2 50000 TRANSFER)" >/dev/null 2>&1; echo $?)"
+check "a different amount is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20001 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a different medium is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 TRANSFER)" fk_refund_movement_cash_movement; echo $?)"
+check "a movement not of type refund is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m3 40000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a movement that does not exist is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 00000000-0000-4000-8000-000000000000 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "another tenant's detail over the movement is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_b $sess_1 $mv_m4 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "another session's detail over the movement is refused by fk_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_2 $mv_m4 20000 CASH)" fk_refund_movement_cash_movement; echo $?)"
+check "a second detail for one movement is refused by uq_refund_movement_cash_movement" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m1 40000 CASH)" uq_refund_movement_cash_movement; echo $?)"
+check "the movement keeps its target unique for the composite key" "$([ "$(sql "select count(*) from pg_constraint where conname = 'uq_cash_movement_refund_target' and contype = 'u' and conrelid = '$SCHEMA.cash_movement'::regclass")" = 1 ]; echo $?)"
+check "an outflow method outside the list is refused by chk_refund_movement_outflow_method" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CARD)" chk_refund_movement_outflow_method; echo $?)"
+check "a blank reason is refused by chk_refund_movement_reason_not_blank" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'customer cancelled'/'   '/")" chk_refund_movement_reason_not_blank; echo $?)"
+check "a null reason is refused by chk_refund_movement_reason_not_blank" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'customer cancelled'/null/")" chk_refund_movement_reason_not_blank; echo $?)"
+check "a detail without reservation is refused by chk_refund_movement_reservation_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/, gen_random_uuid(), 20000/, null, 20000/")" chk_refund_movement_reservation_required; echo $?)"
+check "a detail without authorization is refused by chk_refund_movement_refund_authorization_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH null)" chk_refund_movement_refund_authorization_required; echo $?)"
+check "a detail without executing user is refused by chk_refund_movement_executed_by_required" "$(refused "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, outflow_method, executed_at) values ('$tenant_a', '$sess_1', '$mv_m4', gen_random_uuid(), gen_random_uuid(), 20000, 'customer cancelled', 'CASH', now())" chk_refund_movement_executed_by_required; echo $?)"
+check "a detail without time is refused by chk_refund_movement_executed_at_required" "$(refused "insert into $SCHEMA.refund_movement (tenant_id, cash_session_id, cash_movement_id, refund_authorization_id, reservation_id, amount_cents, reason, executed_by, outflow_method) values ('$tenant_a', '$sess_1', '$mv_m4', gen_random_uuid(), gen_random_uuid(), 20000, 'customer cancelled', gen_random_uuid(), 'CASH')" chk_refund_movement_executed_at_required; echo $?)"
+check "a detail without amount is refused by chk_refund_movement_amount_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 null CASH)" chk_refund_movement_amount_required; echo $?)"
+check "a detail without tenant is refused by chk_refund_movement_tenant_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/values ('$tenant_a'/values (null/")" chk_refund_movement_tenant_required; echo $?)"
+check "a detail without session is refused by chk_refund_movement_cash_session_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'$sess_1'/null/")" chk_refund_movement_cash_session_required; echo $?)"
+check "a detail without movement is refused by chk_refund_movement_cash_movement_required" "$(refused "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH | sed "s/'$mv_m4'/null/")" chk_refund_movement_cash_movement_required; echo $?)"
+check "the stored detail type is REFUND" "$([ "$(sql "select count(*) from $SCHEMA.refund_movement where movement_type = 'REFUND'")" = 2 ]; echo $?)"
+
+echo "AC-D1.15 - cross-domain ids are plain columns"
+check "reservation and authorization carry no foreign key: the only key of the detail is the movement's" "$([ "$(sql "select string_agg(conname, ',' order by conname) from pg_constraint where conrelid = '$SCHEMA.refund_movement'::regclass and contype = 'f'")" = fk_refund_movement_cash_movement ]; echo $?)"
+check "no foreign key of the detail leaves the domain schema" "$([ "$(sql "select count(*) from pg_constraint c join pg_class t on t.oid = c.confrelid join pg_namespace n on n.oid = t.relnamespace where c.conrelid = '$SCHEMA.refund_movement'::regclass and c.contype = 'f' and n.nspname <> '$SCHEMA'")" = 0 ]; echo $?)"
+auth_x="bbbbbbbb-0000-4000-8000-000000000001"
+check "a first detail of an authorization that exists nowhere in this database is accepted" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m4 20000 CASH "'$auth_x'")" >/dev/null 2>&1; echo $?)"
+check "a second detail of the same authorization is accepted (partial executions)" "$(sql "$(rf_sql $tenant_a $sess_1 $mv_m5 10000 CASH "'$auth_x'")" >/dev/null 2>&1; echo $?)"
+check "the two details share the authorization" "$([ "$(sql "select count(*) from $SCHEMA.refund_movement where refund_authorization_id = '$auth_x'")" = 2 ]; echo $?)"
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"

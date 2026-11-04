@@ -1,0 +1,1 @@
+ALTER TABLE cash_reporting.cash_movement DROP CONSTRAINT uq_cash_movement_refund_target;
