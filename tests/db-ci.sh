@@ -55,9 +55,9 @@ for _ in $(seq 1 60); do
 done
 sql "select 1" >/dev/null || { echo "PostgreSQL did not start"; exit 1; }
 
-# Annex J.4, J.7: the schema and the application user belong to multi-tour-infra-postgres. CI does
-# those two things in its place; NOLOGIN is enough because tests become the role with SET ROLE.
-sql "create schema $SCHEMA" >/dev/null
+# Annex J.7: the application user belongs to multi-tour-infra-postgres. CI creates it in its place;
+# NOLOGIN is enough because tests become the role with SET ROLE. The schema is NOT created here:
+# the tree creates it (01_ddl/01_schemas), as multi-tour-infra-postgres leaves schemas to each -db.
 sql "create role cash_reporting_app nologin" >/dev/null
 
 # objects left in the domain schema and roles of the domain (the user is the infrastructure's)
@@ -73,6 +73,7 @@ liquibase validate >/dev/null
 check "liquibase validate passes" "$?"
 
 echo "AC-D1.1 - cash tables live only in the domain schema"
+check "the tree itself creates the schema $SCHEMA" "$([ "$(sql "select count(*) from pg_namespace where nspname = '$SCHEMA'")" = 1 ]; echo $?)"
 in_public="$(sql "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relkind in ('r','p','v','m','S','f') and c.relname not like 'databasechangelog%'")"
 check "nothing of the domain lives in public" "$([ "$in_public" = 0 ]; echo $?)"
 check "the control table $CONTROL exists" "$([ "$(sql "select count(*) from information_schema.tables where table_name = '$CONTROL'")" = 1 ]; echo $?)"
@@ -439,6 +440,7 @@ check "status reports no pending changeset" "$([ "$(liquibase status 2>&1 | grep
 
 echo "AC-D1.22 - rollback leaves nothing and the tree rebuilds (step 3, rollback-count 999)"
 liquibase rollback-count 999 >/dev/null
+check "the schema is dropped by the rollback" "$([ "$(sql "select count(*) from pg_namespace where nspname = '$SCHEMA'")" = 0 ]; echo $?)"
 check "the schema holds no object" "$([ "$(leftovers)" = 0 ]; echo $?)"
 check "the domain roles are gone" "$([ "$(domain_roles)" = 0 ]; echo $?)"
 check "the control table holds no changeset" "$([ "$(applied)" = 0 ]; echo $?)"
