@@ -1,2 +1,16 @@
-# Empty on purpose: every folder carries its changelog from day one, so the execution order is fixed.
-databaseChangeLog: []
+databaseChangeLog:
+  - changeSet:
+      id: ddl-schemas-001
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,schemas"
+      comment: "cash_reporting: the schema of the Cash and Reporting macrodomain. Nothing of the domain lives in public."
+      changes:
+        - sqlFile:
+            path: 001_create_schema_cash_reporting.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/01_schemas/001_create_schema_cash_reporting.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
