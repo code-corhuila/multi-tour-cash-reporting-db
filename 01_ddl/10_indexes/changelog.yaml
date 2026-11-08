@@ -89,3 +89,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/10_indexes/006_create_idx_outbox_event_pending.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-indexes-007
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,10_indexes"
+      comment: "idx_cash_closure_correction_tenant_closure: the correction notes of a closure in time order (plan D-11)."
+      changes:
+        - sqlFile:
+            path: 007_create_idx_cash_closure_correction_tenant_closure.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/10_indexes/007_create_idx_cash_closure_correction_tenant_closure.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
