@@ -1,0 +1,1 @@
+DROP INDEX cash_reporting.idx_cash_closure_correction_tenant_closure;

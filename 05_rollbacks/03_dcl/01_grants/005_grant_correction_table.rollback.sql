@@ -1,0 +1,1 @@
+REVOKE ALL ON cash_reporting.cash_closure_correction FROM cash_reporting_writer, cash_reporting_reader;
