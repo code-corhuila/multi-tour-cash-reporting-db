@@ -248,6 +248,23 @@ check "a reopening of another tenant over this closure is refused by fk_cash_ses
 check "a reopening without user is refused by chk_cash_session_reopening_reopened_by_required" "$(refused "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_at, reason) values ('$tenant_a', '$sess_2', '$cl_s2', now(), 'x')" chk_cash_session_reopening_reopened_by_required; echo $?)"
 check "a reopening without time is refused by chk_cash_session_reopening_reopened_at_required" "$(refused "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reason) values ('$tenant_a', '$sess_2', '$cl_s2', gen_random_uuid(), 'x')" chk_cash_session_reopening_reopened_at_required; echo $?)"
 check "only the two accepted reopenings exist" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_reopening")" = 2 ]; echo $?)"
+echo "AC-D1.23 - a correction note is kept beside the closure and never changes it"
+corr_sql() { # tenant session closure justification-literal
+  echo "insert into $SCHEMA.cash_closure_correction (tenant_id, cash_session_id, cash_session_closure_id, justification, registered_by, registered_at) values ('$1', '$2', '$3', $4, gen_random_uuid(), now())"
+}
+closures_before="$(sql "select count(*) from $SCHEMA.cash_session_closure")"
+check "a correction with justification, user, time and its closure is accepted" "$(sql "$(corr_sql $tenant_a $sess_1 "${cl_1:-none}" "'description fixed'")" >/dev/null 2>&1; echo $?)"
+check "a second correction of the same closure is accepted (several notes per closure)" "$(sql "$(corr_sql $tenant_a $sess_1 "${cl_1:-none}" "'second note'")" >/dev/null 2>&1; echo $?)"
+check "a justification of 500 characters is accepted" "$(sql "$(corr_sql $tenant_a $sess_2 "${cl_s2:-none}" "repeat('x', 500)")" >/dev/null 2>&1; echo $?)"
+check "a blank justification is refused by chk_cash_closure_correction_justification" "$(refused "$(corr_sql $tenant_a $sess_1 "${cl_1:-none}" "'   '")" chk_cash_closure_correction_justification; echo $?)"
+check "a justification of 501 characters is refused by chk_cash_closure_correction_justification" "$(refused "$(corr_sql $tenant_a $sess_1 "${cl_1:-none}" "repeat('x', 501)")" chk_cash_closure_correction_justification; echo $?)"
+check "a null justification is refused by chk_cash_closure_correction_justification" "$(refused "$(corr_sql $tenant_a $sess_1 "${cl_1:-none}" null)" chk_cash_closure_correction_justification; echo $?)"
+check "a correction that names a closure of another session is refused by fk_cash_closure_correction_closure" "$(refused "$(corr_sql $tenant_a $sess_1 "${cl_s2:-none}" "'wrong closure'")" fk_cash_closure_correction_closure; echo $?)"
+check "a correction of another tenant over this closure is refused by fk_cash_closure_correction_closure" "$(refused "$(corr_sql $tenant_b $sess_b "${cl_s2:-none}" "'other tenant'")" fk_cash_closure_correction_closure; echo $?)"
+check "a correction without user is refused by chk_cash_closure_correction_registered_by_required" "$(refused "insert into $SCHEMA.cash_closure_correction (tenant_id, cash_session_id, cash_session_closure_id, justification, registered_by, registered_at) values ('$tenant_a', '$sess_1', '${cl_1:-none}', 'no user', null, now())" chk_cash_closure_correction_registered_by_required; echo $?)"
+check "a correction without time is refused by chk_cash_closure_correction_registered_at_required" "$(refused "insert into $SCHEMA.cash_closure_correction (tenant_id, cash_session_id, cash_session_closure_id, justification, registered_by, registered_at) values ('$tenant_a', '$sess_1', '${cl_1:-none}', 'no time', gen_random_uuid(), null)" chk_cash_closure_correction_registered_at_required; echo $?)"
+check "only the three accepted corrections exist" "$([ "$(sql "select count(*) from $SCHEMA.cash_closure_correction")" = 3 ]; echo $?)"
+check "the corrections changed no closure and created no second cash" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_closure")" = "$closures_before" ]; echo $?)"
 
 # T-05. The movements. Probes run as the owner: they judge constraints, not grants (T-07).
 # Whether the cash had its opening is not checked here: it is DD-4, the -api's guard.
@@ -388,24 +405,25 @@ check "the same idempotency key is held once by each tenant, each seeing only it
 
 echo "AC-D1.19 - no business row can be deleted by the application user"
 check "the application holds exactly SELECT, INSERT, UPDATE on cash_session" "$([ "$(privs cash_reporting_app cash_session)" = "SELECT,INSERT,UPDATE" ]; echo $?)"
-for t in cash_session_closure cash_session_reopening cash_movement refund_movement; do
+for t in cash_session_closure cash_session_reopening cash_closure_correction cash_movement refund_movement; do
   check "the application holds exactly SELECT, INSERT on $t" "$([ "$(privs cash_reporting_app $t)" = "SELECT,INSERT" ]; echo $?)"
 done
 for t in outbox_event idempotency_key; do
   check "the application holds SELECT, INSERT, UPDATE, DELETE on $t and no more" "$([ "$(privs cash_reporting_app $t)" = "SELECT,INSERT,UPDATE,DELETE" ]; echo $?)"
 done
 before="$(business_rows)"
-for t in cash_session cash_session_closure cash_session_reopening cash_movement refund_movement; do
+for t in cash_session cash_session_closure cash_session_reopening cash_closure_correction cash_movement refund_movement; do
   check "DELETE on $t by the application is refused" "$(app_refuses "delete from $SCHEMA.$t"; echo $?)"
 done
 check "no business row disappeared" "$([ "$(business_rows)" = "$before" ] && [ "$before" -gt 0 ]; echo $?)"
+check "UPDATE of a correction by the application is refused" "$(app_refuses "update $SCHEMA.cash_closure_correction set justification = 'x'"; echo $?)"
 check "UPDATE of a refund detail by the application is refused" "$(app_refuses "update $SCHEMA.refund_movement set reason = 'x'"; echo $?)"
 check "the application still closes and reopens a cash: UPDATE of cash_session is accepted" "$(app_ok "update $SCHEMA.cash_session set pending_closure = true where cash_session_id = '$sess_c'"; echo $?)"
 check "the technical tables accept deletion: a key is inserted and deleted by the application" "$(app_ok "$(key_insert $tenant_a "'delete-me-1'"); delete from $SCHEMA.idempotency_key where tenant_id = '$tenant_a' and key = 'delete-me-1'"; echo $?)"
 check "the key is gone" "$([ "$(sql "select count(*) from $SCHEMA.idempotency_key where key = 'delete-me-1'")" = 0 ]; echo $?)"
 check "the technical tables accept deletion: an event is inserted and deleted by the application" "$(app_ok "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'RefundExecuted', 'cccccccc-0000-4000-8000-000000000001', '{}', now()); delete from $SCHEMA.outbox_event where aggregate_id = 'cccccccc-0000-4000-8000-000000000001'"; echo $?)"
 check "the event is gone" "$([ "$(sql "select count(*) from $SCHEMA.outbox_event where aggregate_id = 'cccccccc-0000-4000-8000-000000000001'")" = 0 ]; echo $?)"
-for t in cash_session cash_session_closure cash_session_reopening cash_movement refund_movement; do
+for t in cash_session cash_session_closure cash_session_reopening cash_closure_correction cash_movement refund_movement; do
   check "the reader holds only SELECT on $t" "$([ "$(privs cash_reporting_reader $t)" = SELECT ]; echo $?)"
 done
 check "the reader holds nothing on the two technical tables" "$([ "$(privs cash_reporting_reader outbox_event)" = none ] && [ "$(privs cash_reporting_reader idempotency_key)" = none ]; echo $?)"
@@ -428,7 +446,7 @@ for spec in "uq_cash_session_tenant_business_date|$read_1|the cash of a day" "id
   check "read $n, $what, uses $idx" "$(case "$p" in *"$idx"*) echo 0 ;; *) echo 1 ;; esac)"
   check "read $n needs no Sort node: the index gives the order" "$(case "$p" in *Sort*) echo 1 ;; *) echo 0 ;; esac)"
 done
-check "the six indexes of the plan exist and no other idx_ index does" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 6 ]; echo $?)"
+check "the seven indexes of the plan exist and no other idx_ index does" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 7 ]; echo $?)"
 check "the reopening key index is idx_cash_session_reopening_tenant_session_reopened_at" "$([ "$(sql "select indexdef from pg_indexes where schemaname = '$SCHEMA' and indexname = 'idx_cash_session_reopening_tenant_session_reopened_at'" | grep -c '(tenant_id, cash_session_id, reopened_at)')" = 1 ]; echo $?)"
 check "the open index is partial on OPEN and the outbox index is partial on PENDING" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and ((indexname = 'idx_cash_session_tenant_open' and indexdef like '%(tenant_id, business_date)%' and indexdef like '%status%OPEN%') or (indexname = 'idx_outbox_event_pending' and indexdef like '%(status, occurred_at)%' and indexdef like '%status%PENDING%'))")" = 2 ]; echo $?)"
 
@@ -448,7 +466,7 @@ check "the control table holds no changeset" "$([ "$(applied)" = 0 ]; echo $?)"
 echo "AC-D1.22 - the tree rebuilds (step 4)"
 liquibase update >/dev/null
 check "the rebuild applies the same changesets" "$([ "$(applied)" = "$first" ]; echo $?)"
-check "the rebuilt tree has its six indexes again" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 6 ]; echo $?)"
+check "the rebuilt tree has its seven indexes again" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and indexname like 'idx\_%'")" = 7 ]; echo $?)"
 check "the rebuilt tree has its grants again: DELETE on a movement is still refused" "$([ "$(privs cash_reporting_app cash_movement)" = "SELECT,INSERT" ] && app_refuses "delete from $SCHEMA.cash_movement"; echo $?)"
 
 [ "$fail" -eq 0 ] && echo "db-ci: all checks passed" || { echo "db-ci: FAILED"; exit 1; }
