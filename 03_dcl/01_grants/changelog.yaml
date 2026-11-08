@@ -59,3 +59,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/03_dcl/01_grants/004_grant_reader_select.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: dcl-grants-005
+      author: FernandaRobayo
+      labels: "HU-CSH-001,dcl,grants"
+      comment: "cash_closure_correction: the writer inserts and reads it, the reader reads it, nobody updates or deletes it (AC-D1.23, AC-D1.19)."
+      changes:
+        - sqlFile:
+            path: 005_grant_correction_table.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/005_grant_correction_table.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

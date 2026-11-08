@@ -123,3 +123,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/008_create_refund_movement.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-009
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_closure_correction: the correction note of a closed cash, insert-only, pointing at its closure by composite key; several notes per closure (AC-D1.23, DP-D1-2)."
+      changes:
+        - sqlFile:
+            path: 009_create_cash_closure_correction.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/009_create_cash_closure_correction.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
