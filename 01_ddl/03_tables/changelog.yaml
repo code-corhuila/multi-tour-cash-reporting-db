@@ -138,3 +138,33 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/009_create_cash_closure_correction.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-010
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "daily_dashboard_projection: the six sets of the daily dashboard, one row per tenant and local date, arrays within 10000 (AC-D2.2 to AC-D2.7, DP-D2-3)."
+      changes:
+        - sqlFile:
+            path: 010_create_daily_dashboard_projection.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/010_create_daily_dashboard_projection.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-011
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "processed_event: each consumed event id once per tenant, in the transaction of its effect (AC-D2.8, ADR-004 D10)."
+      changes:
+        - sqlFile:
+            path: 011_create_processed_event.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/011_create_processed_event.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

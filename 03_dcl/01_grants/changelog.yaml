@@ -74,3 +74,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/03_dcl/01_grants/005_grant_correction_table.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: dcl-grants-006
+      author: FernandaRobayo
+      labels: "HU-CSH-002,dcl,grants"
+      comment: "Dashboard tables: the writer inserts and reads (updates only the projection), the reader reads the projection, nobody deletes (AC-D2.11)."
+      changes:
+        - sqlFile:
+            path: 006_grant_dashboard_tables.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/006_grant_dashboard_tables.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
