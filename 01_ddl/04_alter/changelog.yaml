@@ -14,3 +14,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/04_alter/001_add_cash_movement_concept.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-alter-002
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,04_alter"
+      comment: "cash_movement: the optional reservation of an income (plain id of domain 2) and the optional link of a compensating movement (REFUND of an income, INCOME of a refund) to the one it reverses (HU-CSH-001 saga)."
+      changes:
+        - sqlFile:
+            path: 002_add_cash_movement_reservation_id.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/002_add_cash_movement_reservation_id.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
