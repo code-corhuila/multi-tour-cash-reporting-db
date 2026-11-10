@@ -265,6 +265,36 @@ check "a correction without user is refused by chk_cash_closure_correction_regis
 check "a correction without time is refused by chk_cash_closure_correction_registered_at_required" "$(refused "insert into $SCHEMA.cash_closure_correction (tenant_id, cash_session_id, cash_session_closure_id, justification, registered_by, registered_at) values ('$tenant_a', '$sess_1', '${cl_1:-none}', 'no time', gen_random_uuid(), null)" chk_cash_closure_correction_registered_at_required; echo $?)"
 check "only the three accepted corrections exist" "$([ "$(sql "select count(*) from $SCHEMA.cash_closure_correction")" = 3 ]; echo $?)"
 check "the corrections changed no closure and created no second cash" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_closure")" = "$closures_before" ]; echo $?)"
+# HU-CSH-002 (plan D-03 to D-05): the dashboard projection and the processed events. Probes run as the owner.
+echo "AC-D2.1 to AC-D2.7 - the dashboard projection holds six sets and refuses what is not an array or too long"
+dash_cols="tenant_id, report_date, updated_at"
+dash_sql() { # tenant-literal date-literal extra-columns extra-values
+  echo "insert into $SCHEMA.daily_dashboard_projection (tenant_id, report_date, updated_at${3:+, $3}) values ($1, $2, now()${4:+, $4})"
+}
+check "the projection table lives in the domain schema" "$([ "$(sql "select count(*) from information_schema.tables where table_schema = '$SCHEMA' and table_name = 'daily_dashboard_projection'")" = 1 ]; echo $?)"
+check "an empty day is a valid row of six empty arrays" "$(sql "$(dash_sql "'$tenant_a'" "'2026-10-01'")" >/dev/null 2>&1; echo $?)"
+check "the six sets default to an empty array" "$([ "$(sql "select count(*) from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_a' and created_reservations = '[]'::jsonb and pending_payment_reservations = '[]'::jsonb and confirmed_reservations = '[]'::jsonb and confirmed_with_balance = '[]'::jsonb and cancelled_reservations = '[]'::jsonb and upcoming_services = '[]'::jsonb")" = 1 ]; echo $?)"
+check "a second projection of the same tenant and date is refused by uq_daily_dashboard_projection_tenant_report_date" "$(refused "$(dash_sql "'$tenant_a'" "'2026-10-01'")" uq_daily_dashboard_projection_tenant_report_date; echo $?)"
+check "another tenant may hold a projection for the same date" "$(sql "$(dash_sql "'$tenant_b'" "'2026-10-01'")" >/dev/null 2>&1; echo $?)"
+check "a projection without tenant is refused by chk_daily_dashboard_projection_tenant_required" "$(refused "$(dash_sql null "'2026-10-02'")" chk_daily_dashboard_projection_tenant_required; echo $?)"
+check "a projection without date is refused by chk_daily_dashboard_projection_report_date_required" "$(refused "$(dash_sql "'$tenant_a'" null)" chk_daily_dashboard_projection_report_date_required; echo $?)"
+for col in created_reservations pending_payment_reservations confirmed_reservations confirmed_with_balance cancelled_reservations upcoming_services; do
+  check "a set that is not an array is refused by chk_dashboard_${col}_is_array ($col)" "$(refused "$(dash_sql "'$tenant_a'" "'2026-10-03'" $col "'{}'::jsonb")" chk_dashboard_${col}_is_array; echo $?)"
+  # a balance set sits within the confirmed one, whose own maximum fires first: the engine still refuses it
+  max_name="chk_dashboard_${col}_max_items"; [ "$col" = confirmed_with_balance ] && max_name="violates check constraint"
+  check "a set over 10000 elements is refused by its maximum ($col)" "$(refused "$(dash_sql "'$tenant_a'" "'2026-10-03'" $col "(select jsonb_agg(g) from generate_series(1, 10001) g)")" "$max_name"; echo $?)"
+done
+check "a balance reservation that is not confirmed is refused by chk_dashboard_balance_within_confirmed" "$(refused "$(dash_sql "'$tenant_a'" "'2026-10-04'" confirmed_with_balance "'[\"r1\"]'::jsonb")" chk_dashboard_balance_within_confirmed; echo $?)"
+check "a balance reservation that is confirmed is accepted" "$(sql "$(dash_sql "'$tenant_a'" "'2026-10-05'" "confirmed_reservations, confirmed_with_balance" "'[\"r1\",\"r2\"]'::jsonb, '[\"r1\"]'::jsonb")" >/dev/null 2>&1; echo $?)"
+check "the projection keeps the time of the newest event applied (nullable until one is applied)" "$(sql "update $SCHEMA.daily_dashboard_projection set last_event_occurred_at = now() where tenant_id = '$tenant_a' and report_date = '2026-10-05'" >/dev/null 2>&1; echo $?)"
+
+echo "AC-D2.8 - a processed event is recorded once per tenant"
+event_row() { echo "insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values ('$1', '$2', 'ReservationConfirmed', now())"; }
+ev1="aaaaaaaa-0000-4000-8000-000000000001"
+check "a processed event is recorded" "$(sql "$(event_row $tenant_a $ev1)" >/dev/null 2>&1; echo $?)"
+check "the same event twice for one tenant is refused by uq_processed_event_tenant_event" "$(refused "$(event_row $tenant_a $ev1)" uq_processed_event_tenant_event; echo $?)"
+check "another tenant may record the same event id" "$(sql "$(event_row $tenant_b $ev1)" >/dev/null 2>&1; echo $?)"
+check "a processed event without tenant, event id or type is refused" "$(refused "insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values (null, '$ev1', 'X', now())" chk_processed_event_tenant_required; echo $?)"
 
 # T-05. The movements. Probes run as the owner: they judge constraints, not grants (T-07).
 # Whether the cash had its opening is not checked here: it is DD-4, the -api's guard.
@@ -435,6 +465,11 @@ for t in cash_session cash_session_closure cash_session_reopening cash_closure_c
   check "DELETE on $t by the application is refused" "$(app_refuses "delete from $SCHEMA.$t"; echo $?)"
 done
 check "no business row disappeared" "$([ "$(business_rows)" = "$before" ] && [ "$before" -gt 0 ]; echo $?)"
+check "the application holds exactly SELECT, INSERT, UPDATE on daily_dashboard_projection" "$([ "$(privs cash_reporting_app daily_dashboard_projection)" = "SELECT,INSERT,UPDATE" ]; echo $?)"
+check "the application holds exactly SELECT, INSERT on processed_event" "$([ "$(privs cash_reporting_app processed_event)" = "SELECT,INSERT" ]; echo $?)"
+check "DELETE on daily_dashboard_projection by the application is refused" "$(app_refuses "delete from $SCHEMA.daily_dashboard_projection"; echo $?)"
+check "DELETE and UPDATE on processed_event by the application are refused" "$(app_refuses "delete from $SCHEMA.processed_event"; echo $?)"
+check "the reader holds only SELECT on daily_dashboard_projection and nothing on processed_event" "$([ "$(privs cash_reporting_reader daily_dashboard_projection)" = SELECT ] && [ "$(privs cash_reporting_reader processed_event)" = none ]; echo $?)"
 check "UPDATE of a correction by the application is refused" "$(app_refuses "update $SCHEMA.cash_closure_correction set justification = 'x'"; echo $?)"
 check "UPDATE of a refund detail by the application is refused" "$(app_refuses "update $SCHEMA.refund_movement set reason = 'x'"; echo $?)"
 check "the application still closes and reopens a cash: UPDATE of cash_session is accepted" "$(app_ok "update $SCHEMA.cash_session set pending_closure = true where cash_session_id = '$sess_c'"; echo $?)"
