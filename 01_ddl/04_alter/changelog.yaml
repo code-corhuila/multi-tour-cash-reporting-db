@@ -44,3 +44,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/04_alter/003_widen_outbox_event_for_platform_exceptional_access_used.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-alter-004
+      author: FernandaRobayo
+      labels: "HU-SEC-007,ddl,04_alter"
+      comment: "outbox_event: the closed payload of PlatformExceptionalAccessUsed carries usedAt in place of occurredAt (spec 012 RN-SEC-012-07); the envelope keeps occurred_at."
+      changes:
+        - sqlFile:
+            path: 004_rename_exceptional_access_use_payload_instant_to_used_at.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/004_rename_exceptional_access_use_payload_instant_to_used_at.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
