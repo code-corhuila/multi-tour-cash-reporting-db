@@ -158,7 +158,7 @@ echo "HU-SEC-007 db - the revert never erases an audit and leaves the nine event
 sql "$(ea_insert "$(ea_payload)")" >/dev/null 2>&1 || true
 check "the revert of the slice is refused while a use of an exceptional access is stored (chk_outbox_event_event_type)" "$(refused "$(cat "$ea_revert_file" 2>/dev/null || echo 'select 1/0')" chk_outbox_event_event_type; echo $?)"
 sql "delete from $SCHEMA.outbox_event where event_type = 'PlatformExceptionalAccessUsed'" >/dev/null 2>&1 || true
-check "the revert of the slice is accepted once no use is stored, and then the tenth event is refused again" "$(sql "begin; $(cat "$ea_revert_file" 2>/dev/null || echo 'select 1/0'); $(ea_insert "$(ea_payload)"); rollback;" 2>&1 | grep -q chk_outbox_event_event_type; echo $?)"
+check "the revert of the slice is accepted once no use is stored, and then the tenth event is refused again" "$(refused "begin; $(cat "$ea_revert_file" 2>/dev/null || echo "select 1/0"); $(ea_insert "$(ea_payload)"); rollback;" chk_outbox_event_event_type; echo $?)"
 check "the probes left the outbox as they found it" "$([ "$(sql "select count(*) from $SCHEMA.outbox_event")" = "$ea_before" ]; echo $?)"
 
 
