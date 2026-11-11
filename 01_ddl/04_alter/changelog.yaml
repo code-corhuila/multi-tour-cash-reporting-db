@@ -29,3 +29,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/04_alter/002_add_cash_movement_reservation_id.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-alter-003
+      author: FernandaRobayo
+      labels: "HU-SEC-007,ddl,04_alter"
+      comment: "outbox_event: the tenth event, PlatformExceptionalAccessUsed, the audit of each use of an exceptional access token, with its authorization as aggregate and a closed key list (HU-SEC-007 G-SEC9-1)."
+      changes:
+        - sqlFile:
+            path: 003_widen_outbox_event_for_platform_exceptional_access_used.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/003_widen_outbox_event_for_platform_exceptional_access_used.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
