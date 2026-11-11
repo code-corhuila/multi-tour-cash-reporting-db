@@ -116,6 +116,51 @@ check "an unknown status is refused by chk_outbox_event_status" "$(refused "upda
 check "PUBLISHED without published_at is refused by chk_outbox_event_published_at" "$(refused "update $SCHEMA.outbox_event set status = 'PUBLISHED'" chk_outbox_event_published_at; echo $?)"
 check "a payload that is not an object is refused by chk_outbox_event_payload_object" "$(refused "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'RefundExecuted', gen_random_uuid(), '[]', now())" chk_outbox_event_payload_object; echo $?)"
 
+# HU-SEC-007 G-SEC9-1 -db (ADR-004 D5; Project Lead, 2026-11-11): the tenth event of the outbox, PlatformExceptionalAccessUsed, the audit of each use of the token of an exceptional or emergency access.
+# Its aggregate is the authorization of the access (aggregate_id), its payload is closed to eight keys. Every probe below leaves no row behind (its own transaction is rolled back), so the counts above and below hold.
+ea_auth="eeeeeeee-0000-4000-8000-000000000001"
+ea_admin="eeeeeeee-0000-4000-8000-000000000002"
+ea_keys="authorizationId platformAdministratorId tenantId method route area occurredAt correlationId"
+ea_payload() { # optional: a key to leave out, then a JSON fragment to add
+  local out="" k
+  for k in $ea_keys; do
+    [ "$k" = "${1:-}" ] && continue
+    case $k in
+      authorizationId) v="$ea_auth" ;; platformAdministratorId) v="$ea_admin" ;; tenantId) v="$tenant_a" ;;
+      method) v="GET" ;; route) v="/api/v1/cash-reporting/cash-days/{date}/movements" ;; area) v="CASH" ;;
+      occurredAt) v="2026-11-11T10:00:00Z" ;; correlationId) v="corr-1" ;;
+    esac
+    out="$out\"$k\":\"$v\","
+  done
+  printf '{%s%s}' "$out" "${2:-}" | sed 's/,}$/}/'
+}
+ea_insert() { # payload JSON, optional aggregate id
+  echo "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'PlatformExceptionalAccessUsed', '${2:-$ea_auth}', '$1'::jsonb, now())"
+}
+ea_revert_file="05_rollbacks/01_ddl/04_alter/003_widen_outbox_event_for_platform_exceptional_access_used.rollback.sql"
+ea_before="$(sql "select count(*) from $SCHEMA.outbox_event")"
+
+echo "HU-SEC-007 db - the outbox accepts the use of an exceptional access, with its authorization as aggregate"
+check "the use with its eight keys and the authorization as aggregate is accepted" "$(sql "begin; $(ea_insert "$(ea_payload)"); rollback;" >/dev/null 2>&1; echo $?)"
+check "the application user may write it: INSERT is accepted as the application" "$(app_ok "begin; $(ea_insert "$(ea_payload)"); rollback;"; echo $?)"
+check "an event of the older types still takes the empty object" "$(sql "begin; $(event_insert RefundExecuted); rollback;" >/dev/null 2>&1; echo $?)"
+
+echo "HU-SEC-007 db - the use is refused when it is not of the closed shape"
+check "a use that leaves out the correlationId is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload correlationId)")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
+check "a use that leaves out the platformAdministratorId is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload platformAdministratorId)")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
+check "a use that carries a key of the response is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload '' '"responseBody":"x"')")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
+check "a use that carries a query string key is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload '' '"query":"a=1"')")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
+check "a use whose aggregate is not its authorizationId is refused by chk_outbox_event_platform_exceptional_access_used_ids" "$(refused "$(ea_insert "$(ea_payload)" eeeeeeee-0000-4000-8000-0000000000ff)" chk_outbox_event_platform_exceptional_access_used_ids; echo $?)"
+check "a use whose payload tenant is not its tenant is refused by chk_outbox_event_platform_exceptional_access_used_ids" "$(refused "$(ea_insert "$(ea_payload | sed "s/$tenant_a/$tenant_b/")")" chk_outbox_event_platform_exceptional_access_used_ids; echo $?)"
+check "an eleventh event name is still refused by chk_outbox_event_event_type" "$(refused "$(event_insert CashSessionRenamed)" chk_outbox_event_event_type; echo $?)"
+
+echo "HU-SEC-007 db - the revert never erases an audit and leaves the nine events"
+sql "$(ea_insert "$(ea_payload)")" >/dev/null 2>&1 || true
+check "the revert of the slice is refused while a use of an exceptional access is stored (chk_outbox_event_event_type)" "$(refused "$(cat "$ea_revert_file" 2>/dev/null || echo 'select 1/0')" chk_outbox_event_event_type; echo $?)"
+sql "delete from $SCHEMA.outbox_event where event_type = 'PlatformExceptionalAccessUsed'" >/dev/null 2>&1 || true
+check "the revert of the slice is accepted once no use is stored, and then the tenth event is refused again" "$(refused "begin; $(cat "$ea_revert_file" 2>/dev/null || echo "select 1/0"); $(ea_insert "$(ea_payload)"); rollback;" chk_outbox_event_event_type; echo $?)"
+check "the probes left the outbox as they found it" "$([ "$(sql "select count(*) from $SCHEMA.outbox_event")" = "$ea_before" ]; echo $?)"
+
 
 # T-03. The cash session. Probes run as the owner: they judge constraints, not grants (T-07).
 sess() { echo "insert into $SCHEMA.cash_session ($1) values ($2)"; }
