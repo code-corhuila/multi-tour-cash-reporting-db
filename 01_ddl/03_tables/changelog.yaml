@@ -168,3 +168,63 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/011_create_processed_event.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-012
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "reservation_state: the last known state of a reservation, one row per tenant and reservation (AC-D2.18, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 012_create_reservation_state.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/012_create_reservation_state.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-013
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "departure_state: the last known state of a departure, one row per tenant and departure (AC-D2.19, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 013_create_departure_state.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/013_create_departure_state.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-014
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "tenant_time_zone: at most one zone per tenant (AC-D2.20, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 014_create_tenant_time_zone.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/014_create_tenant_time_zone.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-015
+      author: FernandaRobayo
+      labels: "HU-CSH-003,ddl,03_tables"
+      comment: "monthly_administrative_report: one derived report row per tenant and period, the total a formula (AC-D3.1 to AC-D3.15)."
+      changes:
+        - sqlFile:
+            path: 015_create_monthly_administrative_report.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/015_create_monthly_administrative_report.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
