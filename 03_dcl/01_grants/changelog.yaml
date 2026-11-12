@@ -89,3 +89,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/03_dcl/01_grants/006_grant_dashboard_tables.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: dcl-grants-007
+      author: FernandaRobayo
+      labels: "HU-CSH-002,HU-CSH-003,dcl,grants"
+      comment: "Fact tables and monthly report: the writer inserts, reads and updates, the reader reads, nobody deletes (AC-D2.21, AC-D3.12)."
+      changes:
+        - sqlFile:
+            path: 007_grant_fact_and_report_tables.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/007_grant_fact_and_report_tables.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
