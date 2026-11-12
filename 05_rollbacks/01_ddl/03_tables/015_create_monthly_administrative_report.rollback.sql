@@ -1,0 +1,1 @@
+DROP TABLE cash_reporting.monthly_administrative_report;
