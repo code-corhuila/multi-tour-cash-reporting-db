@@ -59,3 +59,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/04_alter/004_rename_exceptional_access_use_payload_instant_to_used_at.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-alter-005
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,04_alter"
+      comment: "reservation_state gains created_at and last_event_id, departure_state gains last_event_id: the creation instant of the flow created today and the tie-break of two events with the same instant (plan D-12)."
+      changes:
+        - sqlFile:
+            path: 005_add_fact_state_creation_and_event_id.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/005_add_fact_state_creation_and_event_id.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
