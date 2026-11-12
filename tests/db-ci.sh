@@ -342,6 +342,63 @@ check "the same event twice for one tenant is refused by uq_processed_event_tena
 check "another tenant may record the same event id" "$(sql "$(event_row $tenant_b $ev1)" >/dev/null 2>&1; echo $?)"
 check "a processed event without tenant, event id or type is refused" "$(refused "insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values (null, '$ev1', 'X', now())" chk_processed_event_tenant_required; echo $?)"
 
+# BEGIN-HU-CSH-DASHBOARD-PROBES (HU-CSH-002, AC-D2.12 and AC-D2.14 to AC-D2.17): the read, no cash needed, the upsert, the repeated event
+echo "AC-D2.12 - the dashboard read uses its unique key"
+tenant_p="55555555-0000-4000-8000-0000000000d2"
+dash_read="select * from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_p' and report_date = '2026-11-02'"
+# the table holds a handful of rows: the plan is judged with the sequential and bitmap scans off, as AC-D1.20 does
+dash_plan="$(app_sql "set enable_seqscan = off; set enable_bitmapscan = off; explain (costs off) $dash_read" || true)"
+echo "$dash_plan" | sed 's/^/        /'
+check "the read of one day uses uq_daily_dashboard_projection_tenant_report_date" "$(case "$dash_plan" in *uq_daily_dashboard_projection_tenant_report_date*) echo 0 ;; *) echo 1 ;; esac)"
+check "the read of one day needs no Sort node and no second index" "$(case "$dash_plan" in *Sort*|*idx_*) echo 1 ;; *) echo 0 ;; esac)"
+
+echo "AC-D2.14 - the dashboard needs no cash"
+dash_ins() { echo "insert into $SCHEMA.daily_dashboard_projection (tenant_id, report_date, updated_at) values ('$tenant_p', '$1', now())"; }
+check "the projection holds no foreign key and no table points at it" "$([ "$(sql "select count(*) from pg_constraint where contype = 'f' and ('$SCHEMA.daily_dashboard_projection'::regclass in (conrelid, confrelid))")" = 0 ]; echo $?)"
+check "the projection holds no trigger of its own" "$([ "$(sql "select count(*) from pg_trigger where tgrelid = '$SCHEMA.daily_dashboard_projection'::regclass and not tgisinternal")" = 0 ]; echo $?)"
+check "the tenant has no cash at all" "$([ "$(sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_p'")" = 0 ]; echo $?)"
+check "a date with no cash is accepted" "$(sql "$(dash_ins 2026-11-02)" >/dev/null 2>&1; echo $?)"
+sql "insert into $SCHEMA.cash_session (tenant_id, business_date, time_zone, origin, created_at) values ('$tenant_p', '2026-11-03', 'America/Bogota', 'AUTOMATIC_CREATION', now())" >/dev/null
+sql "insert into $SCHEMA.cash_session (tenant_id, business_date, time_zone, origin, created_at, opening_base_cents, opened_at, opened_by, pending_closure) values ('$tenant_p', '2026-11-04', 'America/Bogota', 'OPERATIONAL_OPENING', now(), 0, now(), gen_random_uuid(), true)" >/dev/null
+check "a date whose cash was created automatically is accepted" "$(sql "$(dash_ins 2026-11-03)" >/dev/null 2>&1; echo $?)"
+check "a date whose cash is Pendiente de cierre is accepted" "$(sql "$(dash_ins 2026-11-04)" >/dev/null 2>&1; echo $?)"
+sql "insert into $SCHEMA.cash_session (tenant_id, business_date, time_zone, origin, created_at, opening_base_cents, opened_at, opened_by, status, closed_at, closing_mode, closing_balance_cents, closed_by) values ('$tenant_p', '2026-11-05', 'America/Bogota', 'OPERATIONAL_OPENING', now(), 0, now(), gen_random_uuid(), 'CLOSED', now(), 'FORMAL', 0, gen_random_uuid())" >/dev/null
+sql "insert into $SCHEMA.cash_session_closure (tenant_id, cash_session_id, closed_at, closing_mode, closed_by, opening_base_cents, income_cents, operational_payments_cents, operational_expenses_cents, refunds_cents, cash_entries_cents, transfer_entries_cents, cash_exits_cents, transfer_exits_cents, expected_cash_cents, closing_balance_cents) select tenant_id, cash_session_id, now(), 'FORMAL', gen_random_uuid(), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 from $SCHEMA.cash_session where tenant_id = '$tenant_p' and business_date = '2026-11-05'" >/dev/null
+sql "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reopened_at, reason) select tenant_id, cash_session_id, cash_session_closure_id, gen_random_uuid(), now(), 'late transfer' from $SCHEMA.cash_session_closure where tenant_id = '$tenant_p'" >/dev/null
+check "a date whose cash was closed and reopened is accepted" "$(sql "$(dash_ins 2026-11-05)" >/dev/null 2>&1; echo $?)"
+check "the four days are four rows beside three cashes, and none touched a cash table" "$([ "$(sql "select count(*) from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_p'")" = 4 ] && [ "$(sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$tenant_p'")" = 3 ]; echo $?)"
+
+echo "AC-D2.15 - a rebuild upserts as the application, without delete"
+dash_upsert() { # report date, confirmed set literal
+  echo "insert into $SCHEMA.daily_dashboard_projection (tenant_id, report_date, confirmed_reservations, updated_at) values ('$tenant_p', '$1', $2, now()) on conflict (tenant_id, report_date) do update set confirmed_reservations = excluded.confirmed_reservations, updated_at = excluded.updated_at"
+}
+check "the first write of a day, as the application, is an insert" "$(app_ok "$(dash_upsert 2026-11-10 "'[\"r1\"]'::jsonb")"; echo $?)"
+check "the same tenant and date written again, as the application, is an upsert" "$(app_ok "$(dash_upsert 2026-11-10 "'[\"r1\",\"r2\"]'::jsonb")"; echo $?)"
+check "one row remains and it holds the second write" "$([ "$(sql "select count(*) from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_p' and report_date = '2026-11-10' and confirmed_reservations = '[\"r1\",\"r2\"]'::jsonb")" = 1 ]; echo $?)"
+check "the rebuild needed no DELETE: the application still cannot delete a projection" "$(app_refuses "delete from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_p'"; echo $?)"
+
+echo "AC-D2.16 - a repeated event leaves the projection unchanged"
+ev_rep="aaaaaaaa-0000-4000-8000-0000000000d2"
+dash_snapshot() { sql "select md5(string_agg(t::text, '|' order by report_date)) from $SCHEMA.daily_dashboard_projection t where tenant_id = '$tenant_p'"; }
+check "the event is recorded with its first projection write, in one transaction" "$(app_ok "begin; $(dash_upsert 2026-11-11 "'[\"r1\"]'::jsonb"); insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values ('$tenant_p', '$ev_rep', 'ReservationConfirmed', now()); commit;"; echo $?)"
+before_rep="$(dash_snapshot)"
+rep_out="$(app_sql "begin; $(dash_upsert 2026-11-11 "'[\"r1\",\"r9\"]'::jsonb"); insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values ('$tenant_p', '$ev_rep', 'ReservationConfirmed', now()); commit;" || true)"
+check "the same event again is refused by uq_processed_event_tenant_event" "$(case "$rep_out" in *uq_processed_event_tenant_event*) echo 0 ;; *) echo 1 ;; esac)"
+check "the transaction rolled back whole: the projection is as it was" "$([ "$(dash_snapshot)" = "$before_rep" ]; echo $?)"
+check "the repeated event is still one row" "$([ "$(sql "select count(*) from $SCHEMA.processed_event where tenant_id = '$tenant_p' and event_id = '$ev_rep'")" = 1 ]; echo $?)"
+check "a new event in the same transaction commits both, so the probe can see a change" "$(app_ok "begin; $(dash_upsert 2026-11-11 "'[\"r1\",\"r9\"]'::jsonb"); insert into $SCHEMA.processed_event (tenant_id, event_id, event_type, processed_at) values ('$tenant_p', 'aaaaaaaa-0000-4000-8000-0000000000d3', 'ReservationConfirmed', now()); commit;"; echo $?)"
+check "and the projection did change" "$([ "$(dash_snapshot)" != "$before_rep" ]; echo $?)"
+
+echo "AC-D2.17 - a date already stored is written again into the same row"
+check "report_date is a plain date, not an instant" "$([ "$(sql "select data_type from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'daily_dashboard_projection' and column_name = 'report_date'")" = date ]; echo $?)"
+sql "insert into $SCHEMA.tenant_time_zone (tenant_id, time_zone, updated_at) values ('$tenant_p', 'America/Bogota', now())" >/dev/null
+before_zone="$(dash_snapshot)"
+check "the tenant changes its time zone" "$(app_ok "update $SCHEMA.tenant_time_zone set time_zone = 'Asia/Tokyo', updated_at = now() where tenant_id = '$tenant_p'"; echo $?)"
+check "no stored projection row was reinterpreted by the change" "$([ "$(dash_snapshot)" = "$before_zone" ]; echo $?)"
+check "the date already stored, written again after the change, is the same row" "$(app_ok "$(dash_upsert 2026-11-10 "'[\"r1\",\"r2\",\"r3\"]'::jsonb")"; echo $?)"
+check "that tenant still holds one row for that date" "$([ "$(sql "select count(*) from $SCHEMA.daily_dashboard_projection where tenant_id = '$tenant_p' and report_date = '2026-11-10'")" = 1 ]; echo $?)"
+# END-HU-CSH-DASHBOARD-PROBES
+
 # T-05. The movements. Probes run as the owner: they judge constraints, not grants (T-07).
 # Whether the cash had its opening is not checked here: it is DD-4, the -api's guard.
 MV_COLS="tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, registered_by, concept"
