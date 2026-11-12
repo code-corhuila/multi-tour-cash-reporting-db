@@ -668,6 +668,154 @@ for t in reservation_state departure_state tenant_time_zone monthly_administrati
   check "the reader holds only SELECT on $t" "$([ "$(privs cash_reporting_reader $t)" = SELECT ]; echo $?)"
 done
 # END-HU-CSH-FACTS
+# BEGIN-HU-CSH-MONTH-PROBES (HU-CSH-003 plan D-03, AC-D3.16 to AC-D3.24): the sum of the month and its reconciliation, over small seeds
+# The sum is the shape of plan D-03 and the reconciliation the shape of plan D-03 (AC-D3.23); each probe seeds its own tenant.
+echo "AC-D3.16 to AC-D3.24 - the month is the sum of the movements by the business date of their cash"
+P_OPEN="opening_base_cents, opened_at, opened_by"
+P_CLOSED="opening_base_cents, opened_at, opened_by, status, closed_at, closing_mode, closing_balance_cents, closed_by"
+p_cash() { # tenant date origin extra-columns extra-values (zone: P_ZONE, default America/Bogota)
+  sql "insert into $SCHEMA.cash_session (tenant_id, business_date, time_zone, origin, created_at${4:+, $4}) values ('$1', '$2', '${P_ZONE:-America/Bogota}', '${3:-OPERATIONAL_OPENING}', now()${5:+, $5})" >/dev/null
+}
+p_closed_cash() { p_cash "$1" "$2" OPERATIONAL_OPENING "$P_CLOSED" "300000, now(), gen_random_uuid(), 'CLOSED', now(), 'FORMAL', 1120000, gen_random_uuid()"; }
+p_mv_sql() { # tenant date type medium amount registered_at [extra-columns extra-values]
+  echo "insert into $SCHEMA.cash_movement (tenant_id, cash_session_id, movement_type, payment_medium, amount_cents, registered_at, registered_by, concept${7:+, $7}) select '$1', cash_session_id, '$3', '$4', $5, '$6', gen_random_uuid(), 'probe'${8:+, $8} from $SCHEMA.cash_session where tenant_id = '$1' and business_date = '$2'"
+}
+p_mv() { sql "$(p_mv_sql "$@")" >/dev/null; }
+p_closure() { # tenant date: a valid closure snapshot (the default closure of AC-D1.8)
+  sql "insert into $SCHEMA.cash_session_closure (tenant_id, cash_session_id, closed_at, closing_mode, closed_by, opening_base_cents, income_cents, operational_payments_cents, operational_expenses_cents, refunds_cents, cash_entries_cents, transfer_entries_cents, cash_exits_cents, transfer_exits_cents, expected_cash_cents, closing_balance_cents) select tenant_id, cash_session_id, now(), 'FORMAL', gen_random_uuid(), 300000, 1000000, 100000, 50000, 30000, 700000, 300000, 150000, 30000, 850000, 1120000 from $SCHEMA.cash_session where tenant_id = '$1' and business_date = '$2'" >/dev/null
+}
+p_month() { # tenant first-day last-day: the plan D-03 sum, as "TYPE=cents,... n=count"
+  sql "select coalesce(string_agg(t || '=' || total, ',' order by t), 'none') || ' n=' || coalesce(sum(c), 0) from (select m.movement_type t, sum(m.amount_cents) total, count(*) c from $SCHEMA.cash_movement m join $SCHEMA.cash_session cs on cs.tenant_id = m.tenant_id and cs.cash_session_id = m.cash_session_id where m.tenant_id = '$1' and cs.business_date between '$2' and '$3' group by m.movement_type) x"
+}
+p_report() { # tenant first last income cash transfer payments expenses refunds count: a report rebuilt from the movements
+  sql "insert into $SCHEMA.monthly_administrative_report (tenant_id, starts_on, ends_on, period_income_cents, period_income_cash_cents, period_income_transfer_cents, operational_payments_cents, operational_expenses_cents, executed_refunds_cents, consolidated_cash_total_cents, counted_movements, updated_at) values ('$1', '$2', '$3', $4, $5, $6, $7, $8, $9, $4 - $7 - $8 - $9, ${10}, now())" >/dev/null
+}
+p_recon() { # tenant: the components of each stored report that differ from the movements (the reconciliation of plan D-03 and spec 4.2); empty when none
+  sql "select coalesce(string_agg(r.starts_on || ' ' || d.component, ',' order by r.starts_on, d.component), '') from $SCHEMA.monthly_administrative_report r cross join lateral (select coalesce(sum(m.amount_cents) filter (where m.movement_type = 'INCOME'), 0) income, coalesce(sum(m.amount_cents) filter (where m.movement_type = 'OPERATIONAL_PAYMENT'), 0) payments, coalesce(sum(m.amount_cents) filter (where m.movement_type = 'OPERATIONAL_EXPENSE'), 0) expenses, coalesce(sum(m.amount_cents) filter (where m.movement_type = 'REFUND'), 0) refunds, coalesce(sum(m.amount_cents) filter (where m.movement_type = 'INCOME' and m.payment_medium = 'CASH'), 0) income_cash, coalesce(sum(m.amount_cents) filter (where m.movement_type = 'INCOME' and m.payment_medium = 'TRANSFER'), 0) income_transfer, count(m.cash_movement_id) movements from $SCHEMA.cash_session cs join $SCHEMA.cash_movement m on m.tenant_id = cs.tenant_id and m.cash_session_id = cs.cash_session_id where cs.tenant_id = r.tenant_id and cs.business_date between r.starts_on and r.ends_on) t cross join lateral (values ('period_income_cents', r.period_income_cents::numeric, t.income), ('operational_payments_cents', r.operational_payments_cents::numeric, t.payments), ('operational_expenses_cents', r.operational_expenses_cents::numeric, t.expenses), ('executed_refunds_cents', r.executed_refunds_cents::numeric, t.refunds), ('period_income_cash_cents', r.period_income_cash_cents::numeric, t.income_cash), ('period_income_transfer_cents', r.period_income_transfer_cents::numeric, t.income_transfer), ('counted_movements', r.counted_movements::numeric, t.movements::numeric)) d(component, stored, computed) where r.tenant_id = '$1' and d.stored is distinct from d.computed"
+}
+p_snap() { # tenant: a fingerprint of the cashes and the closures of the tenant, to prove they did not change
+  sql "select md5(coalesce((select string_agg(s::text, '|' order by business_date) from $SCHEMA.cash_session s where tenant_id = '$1'), '') || coalesce((select string_agg(c::text, '|' order by cash_session_closure_id) from $SCHEMA.cash_session_closure c where tenant_id = '$1'), ''))"
+}
+
+echo "AC-D3.16 - the month is the business date of the cash, not the time of the movement"
+t16="33333333-0000-4000-8000-000000000016"
+p_cash $t16 2026-09-30; p_cash $t16 2026-10-01
+p_mv $t16 2026-09-30 INCOME CASH 1000 "2026-10-01 02:30:00+00"   # 21:30 of 30 September at UTC-5
+p_mv $t16 2026-10-01 INCOME CASH 500 "2026-10-01 15:00:00+00"
+check "the movement of 02:30 UTC on 1 October counts in September, the month of the date of its cash" "$([ "$(p_month $t16 2026-09-01 2026-09-30)" = "INCOME=1000 n=1" ]; echo $?)"
+check "and in no other: October holds only its own movement" "$([ "$(p_month $t16 2026-10-01 2026-10-31)" = "INCOME=500 n=1" ]; echo $?)"
+check "a sum by the time of the movement would have given October both (the seed tells the two readings apart)" "$([ "$(sql "select sum(amount_cents) from $SCHEMA.cash_movement where tenant_id = '$t16' and registered_at >= '2026-10-01 00:00:00+00' and registered_at < '2026-11-01 00:00:00+00'")" = 1500 ]; echo $?)"
+
+echo "AC-D3.17 - open, pending, automatic and automatically closed cashes count by their movements only"
+t17="33333333-0000-4000-8000-000000000017"
+p_cash $t17 2026-08-03 OPERATIONAL_OPENING "$P_OPEN" "300000, now(), gen_random_uuid()"
+p_cash $t17 2026-08-04 OPERATIONAL_OPENING "$P_OPEN, pending_closure" "200000, now(), gen_random_uuid(), true"
+p_cash $t17 2026-08-05 AUTOMATIC_CREATION
+p_cash $t17 2026-08-06 AUTOMATIC_CREATION "status, closed_at, closing_mode, closing_balance_cents" "'CLOSED', now(), 'AUTOMATIC', 1000"
+for d in 03 04 05 06; do p_mv $t17 2026-08-$d INCOME CASH 1000 "2026-08-$d 15:00:00+00"; done
+check "the four cashes are an open one, a pending one, an automatic one and one closed automatically" "$([ "$(sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$t17' and ((status = 'OPEN' and not pending_closure and origin = 'OPERATIONAL_OPENING') or (pending_closure) or (origin = 'AUTOMATIC_CREATION' and status = 'OPEN') or (closing_mode = 'AUTOMATIC'))")" = 4 ]; echo $?)"
+check "the movements of all four count, once each" "$([ "$(p_month $t17 2026-08-01 2026-08-31)" = "INCOME=4000 n=4" ]; echo $?)"
+check "the bases (500000 together) add nothing" "$([ "$(sql "select sum(opening_base_cents) from $SCHEMA.cash_session where tenant_id = '$t17'")" = 500000 ]; echo $?)"
+
+echo "AC-D3.18 - a day closed twice is counted once"
+t18="33333333-0000-4000-8000-000000000018"
+p_closed_cash $t18 2026-07-10
+p_mv $t18 2026-07-10 INCOME CASH 700000 "2026-07-10 15:00:00+00"
+p_mv $t18 2026-07-10 INCOME TRANSFER 300000 "2026-07-10 16:00:00+00"
+p_closure $t18 2026-07-10
+sql "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reopened_at, reason) select tenant_id, cash_session_id, cash_session_closure_id, gen_random_uuid(), now(), 'late transfer' from $SCHEMA.cash_session_closure where tenant_id = '$t18'" >/dev/null
+p_closure $t18 2026-07-10
+check "the day holds two closures and one reopening" "$([ "$(sql "select count(*) from $SCHEMA.cash_session_closure where tenant_id = '$t18'")" = 2 ] && [ "$(sql "select count(*) from $SCHEMA.cash_session_reopening where tenant_id = '$t18'")" = 1 ]; echo $?)"
+check "the month equals the movements: each counts once" "$([ "$(p_month $t18 2026-07-01 2026-07-31)" = "INCOME=1000000 n=2" ]; echo $?)"
+check "the sum of the closure snapshots would have counted the day twice (the seed tells them apart)" "$([ "$(sql "select sum(income_cents) from $SCHEMA.cash_session_closure where tenant_id = '$t18'")" = 2000000 ]; echo $?)"
+
+echo "AC-D3.19 - a movement after the closing is counted once and the closure stays"
+t19="33333333-0000-4000-8000-000000000019"
+p_closed_cash $t19 2026-06-05
+p_mv $t19 2026-06-05 INCOME CASH 700000 "2026-06-05 15:00:00+00"
+p_mv $t19 2026-06-05 INCOME TRANSFER 300000 "2026-06-05 16:00:00+00"
+p_closure $t19 2026-06-05
+snap_19="$(p_snap $t19)"
+check "a transfer after the closing is accepted as the application" "$(app_ok "$(p_mv_sql $t19 2026-06-05 INCOME TRANSFER 400 "2026-06-06 09:00:00+00" after_closing true)"; echo $?)"
+check "a refund by transfer after the closing is accepted as the application" "$(app_ok "$(p_mv_sql $t19 2026-06-05 REFUND TRANSFER 100 "2026-06-06 10:00:00+00" after_closing true)"; echo $?)"
+check "a cash movement after the closing is refused by chk_cash_movement_after_closing_transfer_only (the physical cash is not touched)" "$(refused "$(p_mv_sql $t19 2026-06-05 INCOME CASH 100 "2026-06-06 11:00:00+00" after_closing true)" chk_cash_movement_after_closing_transfer_only; echo $?)"
+check "the month counts the two late movements once, in the month of their cash" "$([ "$(p_month $t19 2026-06-01 2026-06-30)" = "INCOME=1000400,REFUND=100 n=4" ]; echo $?)"
+check "the cash and its closure snapshot are as they were" "$([ "$(p_snap $t19)" = "$snap_19" ]; echo $?)"
+
+echo "AC-D3.20 - a correction of a closed day reaches the month through its movements"
+t20="33333333-0000-4000-8000-000000000020"
+p_closed_cash $t20 2026-05-12
+p_mv $t20 2026-05-12 INCOME CASH 1000 "2026-05-12 15:00:00+00"
+p_closure $t20 2026-05-12
+p_report $t20 2026-05-01 2026-05-31 1000 1000 0 0 0 0 1
+check "the stored report equals the movements before the correction" "$([ -z "$(p_recon $t20)" ]; echo $?)"
+snap_20="$(p_snap $t20)"
+sql "insert into $SCHEMA.cash_closure_correction (tenant_id, cash_session_id, cash_session_closure_id, justification, registered_by, registered_at) select tenant_id, cash_session_id, cash_session_closure_id, 'description fixed', gen_random_uuid(), now() from $SCHEMA.cash_session_closure where tenant_id = '$t20'" >/dev/null
+sql "insert into $SCHEMA.cash_session_reopening (tenant_id, cash_session_id, cash_session_closure_id, reopened_by, reopened_at, reason) select tenant_id, cash_session_id, cash_session_closure_id, gen_random_uuid(), now(), 'wrong amount' from $SCHEMA.cash_session_closure where tenant_id = '$t20'" >/dev/null
+check "the note and the reopening add nothing to the month" "$([ "$(p_month $t20 2026-05-01 2026-05-31)" = "INCOME=1000 n=1" ]; echo $?)"
+income_20="$(sql "select cash_movement_id from $SCHEMA.cash_movement where tenant_id = '$t20' and movement_type = 'INCOME'")"
+p_mv $t20 2026-05-12 REFUND CASH 1000 "2026-05-13 09:00:00+00" reverses_cash_movement_id "'$income_20'"
+check "the reversal counts as the movement it is" "$([ "$(p_month $t20 2026-05-01 2026-05-31)" = "INCOME=1000,REFUND=1000 n=2" ]; echo $?)"
+check "the closure of the day keeps its original values and no second cash was made" "$([ "$(sql "select count(*) from $SCHEMA.cash_session where tenant_id = '$t20'")" = 1 ] && [ "$(sql "select income_cents || '/' || closing_balance_cents from $SCHEMA.cash_session_closure where tenant_id = '$t20'")" = "1000000/1120000" ] && [ "$(p_snap $t20)" = "$snap_20" ]; echo $?)"
+check "the stored report is stale until it is rebuilt: it differs in the refunds and the count" "$([ "$(p_recon $t20)" = "2026-05-01 counted_movements,2026-05-01 executed_refunds_cents" ]; echo $?)"
+sql "update $SCHEMA.monthly_administrative_report set executed_refunds_cents = 1000, consolidated_cash_total_cents = 0, counted_movements = 2, updated_at = now() where tenant_id = '$t20'" >/dev/null
+check "after the rebuild the stored report equals the movements again" "$([ -z "$(p_recon $t20)" ]; echo $?)"
+
+echo "AC-D3.21 - a change of time zone neither loses nor repeats a movement between months"
+t21="33333333-0000-4000-8000-000000000021"
+sql "insert into $SCHEMA.tenant_time_zone (tenant_id, time_zone, updated_at) values ('$t21', 'America/Bogota', now())" >/dev/null
+P_ZONE=America/Bogota p_cash $t21 2026-03-30; P_ZONE=America/Bogota p_cash $t21 2026-03-31
+P_ZONE=Asia/Tokyo p_cash $t21 2026-04-01; P_ZONE=Asia/Tokyo p_cash $t21 2026-04-02
+p_mv $t21 2026-03-30 INCOME CASH 100 "2026-03-30 15:00:00+00"
+p_mv $t21 2026-03-31 INCOME CASH 200 "2026-04-01 03:00:00+00"   # 22:00 of 31 March at UTC-5
+p_mv $t21 2026-04-01 INCOME CASH 400 "2026-03-31 16:00:00+00"   # 01:00 of 1 April at UTC+9
+p_mv $t21 2026-04-02 INCOME CASH 800 "2026-04-02 10:00:00+00"
+snap_21="$(p_snap $t21)"
+check "the tenant changes its zone as the application and no stored cash is reinterpreted" "$(app_ok "update $SCHEMA.tenant_time_zone set time_zone = 'Asia/Tokyo', updated_at = now() where tenant_id = '$t21'"; echo $?)"
+check "the cashes keep the date and the zone they were created with" "$([ "$(p_snap $t21)" = "$snap_21" ] && [ "$(sql "select count(distinct time_zone) from $SCHEMA.cash_session where tenant_id = '$t21'")" = 2 ]; echo $?)"
+check "March holds the two movements of its cashes" "$([ "$(p_month $t21 2026-03-01 2026-03-31)" = "INCOME=300 n=2" ]; echo $?)"
+check "April holds the other two" "$([ "$(p_month $t21 2026-04-01 2026-04-30)" = "INCOME=1200 n=2" ]; echo $?)"
+check "every movement is in exactly one of the two months" "$([ "$(sql "select count(*) from $SCHEMA.cash_movement where tenant_id = '$t21'")" = 4 ] && [ "$(sql "select sum(amount_cents) from $SCHEMA.cash_movement where tenant_id = '$t21'")" = 1500 ]; echo $?)"
+
+echo "AC-D3.22 - a month with only opening bases, or with no cash, reads zero"
+t22="33333333-0000-4000-8000-000000000022"
+p_cash $t22 2026-02-02 OPERATIONAL_OPENING "$P_OPEN" "300000, now(), gen_random_uuid()"
+p_cash $t22 2026-02-03 OPERATIONAL_OPENING "$P_OPEN" "500000, now(), gen_random_uuid()"
+check "a month with only opening bases reads zero movements and no component" "$([ "$(p_month $t22 2026-02-01 2026-02-28)" = "none n=0" ]; echo $?)"
+check "a month with no cash at all reads the same" "$([ "$(p_month $t22 2026-01-01 2026-01-31)" = "none n=0" ]; echo $?)"
+sql "insert into $SCHEMA.monthly_administrative_report (tenant_id, starts_on, ends_on, updated_at) values ('$t22', '2026-02-01', '2026-02-28', now()), ('$t22', '2026-01-01', '2026-01-31', now())" >/dev/null
+check "the zero row of AC-D3.8 equals that sum: the reconciliation finds no difference" "$([ -z "$(p_recon $t22)" ]; echo $?)"
+check "and the base did not enter the total" "$([ "$(sql "select count(*) from $SCHEMA.monthly_administrative_report where tenant_id = '$t22' and consolidated_cash_total_cents = 0 and period_income_cents = 0 and counted_movements = 0")" = 2 ]; echo $?)"
+
+echo "AC-D3.23 - a stale report is detected by the reconciliation"
+t23="33333333-0000-4000-8000-000000000023"
+p_cash $t23 2026-04-10
+p_mv $t23 2026-04-10 INCOME CASH 1000 "2026-04-10 15:00:00+00"
+p_mv $t23 2026-04-10 INCOME TRANSFER 500 "2026-04-10 16:00:00+00"
+p_mv $t23 2026-04-10 OPERATIONAL_EXPENSE CASH 200 "2026-04-10 17:00:00+00"
+p_mv $t23 2026-04-10 REFUND CASH 100 "2026-04-10 18:00:00+00"
+p_report $t23 2026-04-01 2026-04-30 1500 1000 500 0 200 100 4
+check "a report rebuilt from the movements shows no difference" "$([ -z "$(p_recon $t23)" ]; echo $?)"
+p_mv $t23 2026-04-10 INCOME TRANSFER 300 "2026-04-11 09:00:00+00"
+check "a movement added without a rebuild shows the income, its transfer part and the count" "$([ "$(p_recon $t23)" = "2026-04-01 counted_movements,2026-04-01 period_income_cents,2026-04-01 period_income_transfer_cents" ]; echo $?)"
+sql "update $SCHEMA.monthly_administrative_report set period_income_cents = 1800, period_income_transfer_cents = 800, consolidated_cash_total_cents = 1500, counted_movements = 5, updated_at = now() where tenant_id = '$t23'" >/dev/null
+check "after the rebuild there is no difference again" "$([ -z "$(p_recon $t23)" ]; echo $?)"
+sql "update $SCHEMA.monthly_administrative_report set operational_expenses_cents = 250, consolidated_cash_total_cents = 1450 where tenant_id = '$t23'" >/dev/null
+check "a stored component altered without a rebuild shows exactly that component" "$([ "$(p_recon $t23)" = "2026-04-01 operational_expenses_cents" ]; echo $?)"
+
+echo "AC-D3.24 - a reversal counts as a movement of its own type"
+t24="33333333-0000-4000-8000-000000000024"
+p_cash $t24 2026-01-15
+p_mv $t24 2026-01-15 INCOME CASH 1000 "2026-01-15 15:00:00+00"
+i1="$(sql "select cash_movement_id from $SCHEMA.cash_movement where tenant_id = '$t24' and movement_type = 'INCOME' and amount_cents = 1000")"
+p_mv $t24 2026-01-15 REFUND CASH 1000 "2026-01-15 16:00:00+00" reverses_cash_movement_id "'$i1'"
+p_mv $t24 2026-01-15 REFUND TRANSFER 400 "2026-01-15 17:00:00+00"
+r2="$(sql "select cash_movement_id from $SCHEMA.cash_movement where tenant_id = '$t24' and movement_type = 'REFUND' and amount_cents = 400")"
+p_mv $t24 2026-01-15 INCOME TRANSFER 400 "2026-01-15 18:00:00+00" reverses_cash_movement_id "'$r2'"
+check "the income reversed by a refund and the refund reversed by an income each count in their own type" "$([ "$(p_month $t24 2026-01-01 2026-01-31)" = "INCOME=1400,REFUND=1400 n=4" ]; echo $?)"
+check "no movement is counted twice: the two types add up to every row once" "$([ "$(sql "select sum(amount_cents) from $SCHEMA.cash_movement where tenant_id = '$t24'")" = 2800 ]; echo $?)"
+check "the total of the month is net: income minus refunds is zero" "$([ "$(sql "select sum(case movement_type when 'INCOME' then amount_cents else -amount_cents end) from $SCHEMA.cash_movement where tenant_id = '$t24'")" = 0 ]; echo $?)"
+# END-HU-CSH-MONTH-PROBES
 
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
