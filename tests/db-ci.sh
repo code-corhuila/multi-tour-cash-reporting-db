@@ -612,6 +612,27 @@ for t in reservation_state departure_state tenant_time_zone monthly_administrati
 done
 # END-HU-CSH-FACTS
 
+# BEGIN-HU-SEC-CUTOFF (HU-SEC-005 AC4, HU-SEC-006 AC7; ADR-004 D5): the cutoff of the sessions of an account
+echo "HU-SEC-005 AC4 and HU-SEC-006 AC7 - the cutoff of the sessions of an account, one row per account"
+acct_a="aaaaaaaa-0000-4000-8000-00000000000a"
+acct_b="aaaaaaaa-0000-4000-8000-00000000000b"
+evt_1="eeeeeeee-0000-4000-8000-000000000a01"
+cutoff_cols="account_id, tenant_id, session_cutoff_at, event_id, updated_at"
+cutoff_sql() { # account tenant cutoff event
+  echo "insert into $SCHEMA.account_session_cutoff ($cutoff_cols) values ($1, $2, $3, $4, now())"
+}
+check "the cutoff of an account of a tenant is recorded" "$(sql "$(cutoff_sql "'$acct_a'" "'$tenant_a'" "'2026-11-12T10:00:00Z'" "'$evt_1'")" >/dev/null 2>&1; echo $?)"
+check "the cutoff of an account of the platform is recorded with no tenant" "$(sql "$(cutoff_sql "'$acct_b'" null "'2026-11-12T10:00:00Z'" "'$evt_1'")" >/dev/null 2>&1; echo $?)"
+check "a second row of the same account is refused by uq_account_session_cutoff_account" "$(refused "$(cutoff_sql "'$acct_a'" "'$tenant_a'" "'2026-11-12T11:00:00Z'" "'$evt_1'")" uq_account_session_cutoff_account; echo $?)"
+check "a cutoff without account is refused by chk_account_session_cutoff_account_required" "$(refused "$(cutoff_sql null "'$tenant_a'" "'2026-11-12T10:00:00Z'" "'$evt_1'")" chk_account_session_cutoff_account_required; echo $?)"
+check "a cutoff without instant is refused by chk_account_session_cutoff_session_cutoff_at_required" "$(refused "$(cutoff_sql "'$acct_a'" "'$tenant_a'" null "'$evt_1'")" chk_account_session_cutoff_session_cutoff_at_required; echo $?)"
+check "a cutoff without event id is refused by chk_account_session_cutoff_event_id_required" "$(refused "$(cutoff_sql "'$acct_a'" "'$tenant_a'" "'2026-11-12T10:00:00Z'" null)" chk_account_session_cutoff_event_id_required; echo $?)"
+check "the application inserts, reads and updates a cutoff (it moves forward by update)" "$(app_ok "insert into $SCHEMA.account_session_cutoff ($cutoff_cols) values ('aaaaaaaa-0000-4000-8000-00000000000c', null, now(), '$evt_1', now()); update $SCHEMA.account_session_cutoff set session_cutoff_at = now(), updated_at = now() where account_id = '$acct_a'; select count(*) from $SCHEMA.account_session_cutoff"; echo $?)"
+check "the application holds exactly SELECT, INSERT, UPDATE on account_session_cutoff" "$([ "$(privs cash_reporting_app account_session_cutoff)" = "SELECT,INSERT,UPDATE" ]; echo $?)"
+check "DELETE on account_session_cutoff by the application is refused" "$(app_refuses "delete from $SCHEMA.account_session_cutoff"; echo $?)"
+check "the reader holds only SELECT on account_session_cutoff" "$([ "$(privs cash_reporting_reader account_session_cutoff)" = SELECT ]; echo $?)"
+# END-HU-SEC-CUTOFF
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"
