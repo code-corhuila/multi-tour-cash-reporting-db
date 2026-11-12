@@ -1,0 +1,1 @@
+DROP TABLE cash_reporting.account_session_cutoff;

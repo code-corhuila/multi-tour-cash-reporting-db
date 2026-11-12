@@ -228,3 +228,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/03_tables/015_create_monthly_administrative_report.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-tables-016
+      author: FernandaRobayo
+      labels: "HU-SEC-005,HU-SEC-006,ddl,03_tables"
+      comment: "account_session_cutoff: the instant from which the tokens of an account are refused, one row per account (HU-SEC-005 AC4, HU-SEC-006 AC7)."
+      changes:
+        - sqlFile:
+            path: 016_create_account_session_cutoff.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/016_create_account_session_cutoff.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

@@ -104,3 +104,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/03_dcl/01_grants/007_grant_fact_and_report_tables.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: dcl-grants-008
+      author: FernandaRobayo
+      labels: "HU-SEC-005,HU-SEC-006,dcl,grants"
+      comment: "account_session_cutoff: the writer inserts, reads and updates, the reader reads, nobody deletes."
+      changes:
+        - sqlFile:
+            path: 008_grant_account_session_cutoff.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/03_dcl/01_grants/008_grant_account_session_cutoff.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
