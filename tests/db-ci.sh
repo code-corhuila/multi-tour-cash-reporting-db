@@ -117,10 +117,10 @@ check "PUBLISHED without published_at is refused by chk_outbox_event_published_a
 check "a payload that is not an object is refused by chk_outbox_event_payload_object" "$(refused "insert into $SCHEMA.outbox_event (tenant_id, event_type, aggregate_id, payload, occurred_at) values ('$tenant_a', 'RefundExecuted', gen_random_uuid(), '[]', now())" chk_outbox_event_payload_object; echo $?)"
 
 # HU-SEC-007 G-SEC9-1 -db (ADR-004 D5; Project Lead, 2026-11-11): the tenth event of the outbox, PlatformExceptionalAccessUsed, the audit of each use of the token of an exceptional or emergency access.
-# Its aggregate is the authorization of the access (aggregate_id), its payload is closed to eight keys. Every probe below leaves no row behind (its own transaction is rolled back), so the counts above and below hold.
+# Its aggregate is the authorization of the access (aggregate_id), its payload is closed to eight keys, the instant being usedAt and not occurredAt (spec 012 RN-SEC-012-07; changeset 004). Every probe below leaves no row behind (its own transaction is rolled back), so the counts above and below hold.
 ea_auth="eeeeeeee-0000-4000-8000-000000000001"
 ea_admin="eeeeeeee-0000-4000-8000-000000000002"
-ea_keys="authorizationId platformAdministratorId tenantId method route area occurredAt correlationId"
+ea_keys="authorizationId platformAdministratorId tenantId method route area usedAt correlationId"
 ea_payload() { # optional: a key to leave out, then a JSON fragment to add
   local out="" k
   for k in $ea_keys; do
@@ -128,7 +128,7 @@ ea_payload() { # optional: a key to leave out, then a JSON fragment to add
     case $k in
       authorizationId) v="$ea_auth" ;; platformAdministratorId) v="$ea_admin" ;; tenantId) v="$tenant_a" ;;
       method) v="GET" ;; route) v="/api/v1/cash-reporting/cash-days/{date}/movements" ;; area) v="CASH" ;;
-      occurredAt) v="2026-11-11T10:00:00Z" ;; correlationId) v="corr-1" ;;
+      usedAt) v="2026-11-11T10:00:00Z" ;; correlationId) v="corr-1" ;;
     esac
     out="$out\"$k\":\"$v\","
   done
@@ -150,6 +150,7 @@ check "a use that leaves out the correlationId is refused by chk_outbox_event_pl
 check "a use that leaves out the platformAdministratorId is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload platformAdministratorId)")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
 check "a use that carries a key of the response is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload '' '"responseBody":"x"')")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
 check "a use that carries a query string key is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload '' '"query":"a=1"')")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
+check "a use whose instant is named occurredAt instead of usedAt is refused by chk_outbox_event_platform_exceptional_access_used_keys" "$(refused "$(ea_insert "$(ea_payload usedAt '"occurredAt":"2026-11-11T10:00:00Z"')")" chk_outbox_event_platform_exceptional_access_used_keys; echo $?)"
 check "a use whose aggregate is not its authorizationId is refused by chk_outbox_event_platform_exceptional_access_used_ids" "$(refused "$(ea_insert "$(ea_payload)" eeeeeeee-0000-4000-8000-0000000000ff)" chk_outbox_event_platform_exceptional_access_used_ids; echo $?)"
 check "a use whose payload tenant is not its tenant is refused by chk_outbox_event_platform_exceptional_access_used_ids" "$(refused "$(ea_insert "$(ea_payload | sed "s/$tenant_a/$tenant_b/")")" chk_outbox_event_platform_exceptional_access_used_ids; echo $?)"
 check "an eleventh event name is still refused by chk_outbox_event_event_type" "$(refused "$(event_insert CashSessionRenamed)" chk_outbox_event_event_type; echo $?)"
