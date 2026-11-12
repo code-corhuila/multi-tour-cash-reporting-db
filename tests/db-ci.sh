@@ -550,6 +550,66 @@ check "the seven indexes of the plan exist and no other idx_ index does" "$([ "$
 check "the reopening key index is idx_cash_session_reopening_tenant_session_reopened_at" "$([ "$(sql "select indexdef from pg_indexes where schemaname = '$SCHEMA' and indexname = 'idx_cash_session_reopening_tenant_session_reopened_at'" | grep -c '(tenant_id, cash_session_id, reopened_at)')" = 1 ]; echo $?)"
 check "the open index is partial on OPEN and the outbox index is partial on PENDING" "$([ "$(sql "select count(*) from pg_indexes where schemaname = '$SCHEMA' and ((indexname = 'idx_cash_session_tenant_open' and indexdef like '%(tenant_id, business_date)%' and indexdef like '%status%OPEN%') or (indexname = 'idx_outbox_event_pending' and indexdef like '%(status, occurred_at)%' and indexdef like '%status%PENDING%'))")" = 2 ]; echo $?)"
 
+# BEGIN-HU-CSH-FACTS (HU-CSH-002 plan D-12 and HU-CSH-003 plan D-02): probes run as the owner, then as the application
+echo "AC-D2.18 to AC-D2.20 - the last known state of a reservation, a departure and the zone of a tenant"
+fact_sql() { # table columns values
+  echo "insert into $SCHEMA.$1 ($2) values ($3)"
+}
+rs_cols="tenant_id, reservation_id, status, updated_at"
+check "a reservation state is recorded" "$(sql "$(fact_sql reservation_state "$rs_cols" "'$tenant_a', 'r-1', 'CONFIRMED', now()")" >/dev/null 2>&1; echo $?)"
+check "a second state of the same tenant and reservation is refused by uq_reservation_state_tenant_reservation" "$(refused "$(fact_sql reservation_state "$rs_cols" "'$tenant_a', 'r-1', 'CANCELLED', now()")" uq_reservation_state_tenant_reservation; echo $?)"
+check "another tenant may hold the same reservation id" "$(sql "$(fact_sql reservation_state "$rs_cols" "'$tenant_b', 'r-1', 'CONFIRMED', now()")" >/dev/null 2>&1; echo $?)"
+check "a reservation state without tenant is refused by chk_reservation_state_tenant_required" "$(refused "$(fact_sql reservation_state "$rs_cols" "null, 'r-2', 'CONFIRMED', now()")" chk_reservation_state_tenant_required; echo $?)"
+check "a reservation state without reservation id is refused by chk_reservation_state_reservation_required" "$(refused "$(fact_sql reservation_state "$rs_cols" "'$tenant_a', null, 'CONFIRMED', now()")" chk_reservation_state_reservation_required; echo $?)"
+check "a reservation state with a blank status is refused by chk_reservation_state_status_required" "$(refused "$(fact_sql reservation_state "$rs_cols" "'$tenant_a', 'r-3', '  ', now()")" chk_reservation_state_status_required; echo $?)"
+check "the reservation state keeps the financial situation and the newest event time" "$(sql "update $SCHEMA.reservation_state set financial_situation = 'BALANCE_PENDING', last_event_occurred_at = now() where tenant_id = '$tenant_a' and reservation_id = 'r-1'" >/dev/null 2>&1; echo $?)"
+ds_cols="tenant_id, departure_id, status, updated_at"
+check "a departure state is recorded with its scheduled start" "$(sql "$(fact_sql departure_state "$ds_cols, scheduled_start" "'$tenant_a', 'd-1', 'SCHEDULED', now(), now()")" >/dev/null 2>&1; echo $?)"
+check "a second state of the same tenant and departure is refused by uq_departure_state_tenant_departure" "$(refused "$(fact_sql departure_state "$ds_cols" "'$tenant_a', 'd-1', 'CANCELLED', now()")" uq_departure_state_tenant_departure; echo $?)"
+check "a departure state without tenant is refused by chk_departure_state_tenant_required" "$(refused "$(fact_sql departure_state "$ds_cols" "null, 'd-2', 'SCHEDULED', now()")" chk_departure_state_tenant_required; echo $?)"
+check "a departure state without departure id is refused by chk_departure_state_departure_required" "$(refused "$(fact_sql departure_state "$ds_cols" "'$tenant_a', null, 'SCHEDULED', now()")" chk_departure_state_departure_required; echo $?)"
+tz_cols="tenant_id, time_zone, updated_at"
+check "the zone of a tenant is recorded" "$(sql "$(fact_sql tenant_time_zone "$tz_cols" "'$tenant_a', 'America/Bogota', now()")" >/dev/null 2>&1; echo $?)"
+check "a second zone of the same tenant is refused by uq_tenant_time_zone_tenant" "$(refused "$(fact_sql tenant_time_zone "$tz_cols" "'$tenant_a', 'UTC', now()")" uq_tenant_time_zone_tenant; echo $?)"
+check "a blank zone is refused by chk_tenant_time_zone_time_zone_required" "$(refused "$(fact_sql tenant_time_zone "$tz_cols" "'$tenant_b', '  ', now()")" chk_tenant_time_zone_time_zone_required; echo $?)"
+check "a zone without tenant is refused by chk_tenant_time_zone_tenant_required" "$(refused "$(fact_sql tenant_time_zone "$tz_cols" "null, 'UTC', now()")" chk_tenant_time_zone_tenant_required; echo $?)"
+
+echo "AC-D3.1 to AC-D3.15 - the monthly administrative report is a formula, one row per tenant and period"
+mr_cols="tenant_id, starts_on, ends_on, updated_at"
+mr_sql() { # tenant starts ends extra-columns extra-values
+  echo "insert into $SCHEMA.monthly_administrative_report ($mr_cols${4:+, $4}) values ($1, $2, $3, now()${5:+, $5})"
+}
+check "an empty month is a valid row of zeros, with the confirmed sales unknown (null)" "$(sql "$(mr_sql "'$tenant_a'" "'2026-10-01'" "'2026-10-31'")" >/dev/null 2>&1; echo $?)"
+check "the empty month holds zero components, empty sets and no confirmed sales" "$([ "$(sql "select count(*) from $SCHEMA.monthly_administrative_report where tenant_id = '$tenant_a' and period_income_cents = 0 and consolidated_cash_total_cents = 0 and counted_movements = 0 and registered_cancellations = '[]'::jsonb and registered_operational_costs = '[]'::jsonb and confirmed_sales_cents is null")" = 1 ]; echo $?)"
+check "a second report of the same tenant and period is refused by uq_monthly_report_tenant_period" "$(refused "$(mr_sql "'$tenant_a'" "'2026-10-01'" "'2026-10-31'")" uq_monthly_report_tenant_period; echo $?)"
+check "another tenant may hold a report for the same period" "$(sql "$(mr_sql "'$tenant_b'" "'2026-10-01'" "'2026-10-31'")" >/dev/null 2>&1; echo $?)"
+check "a report without tenant is refused by chk_report_tenant_required" "$(refused "$(mr_sql null "'2026-09-01'" "'2026-09-30'")" chk_report_tenant_required; echo $?)"
+check "a period whose start is after its end is refused by chk_report_period" "$(refused "$(mr_sql "'$tenant_a'" "'2026-09-30'" "'2026-09-01'")" chk_report_period; echo $?)"
+for col in period_income_cents operational_payments_cents operational_expenses_cents executed_refunds_cents; do
+  # the income also changes the split: another constraint would refuse it first (they fire in alphabetical order)
+  cols="$col"; vals="-1"; [ "$col" = period_income_cents ] && { cols="$col, period_income_cash_cents"; vals="-1, -1"; }
+  check "a negative $col is refused by chk_report_${col}_nonnegative" "$(refused "$(mr_sql "'$tenant_a'" "'2026-08-01'" "'2026-08-31'" "$cols" "$vals")" chk_report_${col}_nonnegative; echo $?)"
+done
+check "a total that is not income - payments - expenses - refunds is refused by chk_report_total_formula" "$(refused "$(mr_sql "'$tenant_a'" "'2026-08-01'" "'2026-08-31'" "period_income_cents, period_income_cash_cents, consolidated_cash_total_cents" "1000, 1000, 999")" chk_report_total_formula; echo $?)"
+check "a negative total that follows the formula is accepted" "$(sql "$(mr_sql "'$tenant_a'" "'2026-07-01'" "'2026-07-31'" "operational_expenses_cents, consolidated_cash_total_cents" "500, -500")" >/dev/null 2>&1; echo $?)"
+check "an income split that does not add to the income is refused by chk_report_income_by_medium" "$(refused "$(mr_sql "'$tenant_a'" "'2026-06-01'" "'2026-06-30'" "period_income_cents, period_income_cash_cents, period_income_transfer_cents, consolidated_cash_total_cents" "1000, 600, 300, 1000")" chk_report_income_by_medium; echo $?)"
+check "a negative count of movements is refused by chk_report_counted_movements_nonnegative" "$(refused "$(mr_sql "'$tenant_a'" "'2026-05-01'" "'2026-05-31'" "counted_movements" "-1")" chk_report_counted_movements_nonnegative; echo $?)"
+check "negative confirmed sales are refused by chk_report_confirmed_sales_nonnegative" "$(refused "$(mr_sql "'$tenant_a'" "'2026-05-01'" "'2026-05-31'" "confirmed_sales_cents" "-1")" chk_report_confirmed_sales_nonnegative; echo $?)"
+check "known confirmed sales of zero or more are accepted" "$(sql "$(mr_sql "'$tenant_a'" "'2026-04-01'" "'2026-04-30'" "confirmed_sales_cents" "0")" >/dev/null 2>&1; echo $?)"
+for col in registered_cancellations registered_operational_costs; do
+  short="${col/registered_operational_costs/costs}"; short="${short/registered_cancellations/cancellations}"
+  check "a set that is not an array is refused by chk_report_${short}_is_array ($col)" "$(refused "$(mr_sql "'$tenant_a'" "'2026-03-01'" "'2026-03-31'" "$col" "'{}'::jsonb")" chk_report_${short}_is_array; echo $?)"
+  check "a set over 10000 elements is refused by chk_report_${short}_max_items ($col)" "$(refused "$(mr_sql "'$tenant_a'" "'2026-03-01'" "'2026-03-31'" "$col" "(select jsonb_agg(g) from generate_series(1, 10001) g)")" chk_report_${short}_max_items; echo $?)"
+done
+
+echo "AC-D2.21 and AC-D3.12 - the new tables are written by the application and never deleted"
+for t in reservation_state departure_state tenant_time_zone monthly_administrative_report; do
+  check "the application holds exactly SELECT, INSERT, UPDATE on $t" "$([ "$(privs cash_reporting_app $t)" = "SELECT,INSERT,UPDATE" ]; echo $?)"
+  check "DELETE on $t by the application is refused" "$(app_refuses "delete from $SCHEMA.$t"; echo $?)"
+  check "the reader holds only SELECT on $t" "$([ "$(privs cash_reporting_reader $t)" = SELECT ]; echo $?)"
+done
+# END-HU-CSH-FACTS
+
 echo "step 2 - the runner applies zero changesets the second time (AC-D1.21)"
 liquibase update >/dev/null
 check "the control table did not grow" "$([ "$(applied)" = "$first" ]; echo $?)"
