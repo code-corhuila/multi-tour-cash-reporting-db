@@ -16,7 +16,7 @@ permissions:
 jobs:
   migrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30 # the suite is about one seventh of the commercial one in lines (860 against 6,455); not measured here
     steps:
       - uses: actions/checkout@v4
 
