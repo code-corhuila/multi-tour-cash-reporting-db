@@ -1,10 +1,10 @@
 name: db-ci
 
-# The four steps of Annex A against an empty PostgreSQL. Pull requests toward develop and qa only,
+# The four steps of Annex A against an empty PostgreSQL. Pull requests toward develop, qa and main only,
 # as the course asks to save automation minutes. No schedule and no manual trigger.
 on:
   pull_request:
-    branches: [develop, qa]
+    branches: [develop, qa, main]
 
 concurrency:
   group: db-ci-${{ github.ref }}
