@@ -412,7 +412,7 @@ check "an income in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME 
 check "an operational payment by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_PAYMENT TRANSFER 100000)" >/dev/null 2>&1; echo $?)"
 check "an operational expense in cash is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH 50000)" >/dev/null 2>&1; echo $?)"
 check "a refund by transfer is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 REFUND TRANSFER 30000)" >/dev/null 2>&1; echo $?)"
-check "the movement holds the 12 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 12 ]; echo $?)"
+check "the movement holds the 13 columns of the model" "$([ "$(sql "select count(*) from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement'")" = 13 ]; echo $?)"
 check "the amount is bigint cents" "$([ "$(sql "select data_type from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement' and column_name = 'amount_cents'")" = bigint ]; echo $?)"
 check "an amount of zero is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 INCOME CASH 0)" chk_cash_movement_amount_positive; echo $?)"
 check "a negative amount is refused by chk_cash_movement_amount_positive" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH -1)" chk_cash_movement_amount_positive; echo $?)"
@@ -458,6 +458,19 @@ check "a second compensation of the same movement is refused by uq_cash_movement
 check "a compensation that is neither a REFUND nor an INCOME is refused by chk_cash_movement_reverses_income_or_refund" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE TRANSFER 1000 reverses_cash_movement_id "'$rev_src'")" chk_cash_movement_reverses_income_or_refund; echo $?)"
 check "a compensation of a movement that does not exist is refused by fk_cash_movement_reverses" "$(refused "$(mv_sql $tenant_a $sess_1 REFUND TRANSFER 1000 reverses_cash_movement_id "'eeeeeeee-0000-4000-8000-000000000001'")" fk_cash_movement_reverses; echo $?)"
 check "a compensation of another tenant's movement is refused by fk_cash_movement_reverses" "$(refused "$(mv_sql $tenant_b "$(sid $tenant_b 2026-09-01)" REFUND TRANSFER 1000 reverses_cash_movement_id "'$rev_src'")" fk_cash_movement_reverses; echo $?)"
+
+# T-05d. One income per payment (audit 2026-11-13, HU-WFL-002): the payment an income registers is a plain id of
+# domain 2 (Annex J.3.4). A second income of the same payment in the same tenant is refused, whatever its idempotency key.
+# Every probe runs in its own transaction and rolls back, so the counts of the probes below hold.
+echo "HU-WFL-002 - an income registers the payment it came from once"
+pay_a="dddddddd-0000-4000-8000-0000000000b1"
+check "payment_reference is a nullable uuid" "$([ "$(sql "select data_type || '/' || is_nullable from information_schema.columns where table_schema = '$SCHEMA' and table_name = 'cash_movement' and column_name = 'payment_reference'")" = 'uuid/YES' ]; echo $?)"
+check "an income with its payment is accepted" "$(sql "begin; $(mv_sql $tenant_a $sess_1 INCOME CASH 1000 payment_reference "'$pay_a'"); rollback;" >/dev/null 2>&1; echo $?)"
+check "a second income of the same payment and tenant is refused by uq_cash_movement_tenant_payment_reference" "$(refused "begin; $(mv_sql $tenant_a $sess_1 INCOME CASH 1000 payment_reference "'$pay_a'"); $(mv_sql $tenant_a $sess_1 INCOME CASH 2000 payment_reference "'$pay_a'"); rollback;" uq_cash_movement_tenant_payment_reference; echo $?)"
+check "another tenant may register the same payment id" "$(sql "begin; $(mv_sql $tenant_a $sess_1 INCOME CASH 1000 payment_reference "'$pay_a'"); $(mv_sql $tenant_b $sess_b INCOME CASH 1000 payment_reference "'$pay_a'"); rollback;" >/dev/null 2>&1; echo $?)"
+check "movements without a payment are not limited" "$(sql "begin; $(mv_sql $tenant_a $sess_1 INCOME CASH 1000); $(mv_sql $tenant_a $sess_1 INCOME CASH 1000); rollback;" >/dev/null 2>&1; echo $?)"
+check "a movement that is not an income with a payment is refused by chk_cash_movement_payment_reference_income" "$(refused "$(mv_sql $tenant_a $sess_1 OPERATIONAL_EXPENSE CASH 1000 payment_reference "'$pay_a'")" chk_cash_movement_payment_reference_income; echo $?)"
+check "the application may write the payment reference: INSERT is accepted as the application" "$(app_ok "begin; $(mv_sql $tenant_a $sess_1 INCOME CASH 1000 payment_reference "'$pay_a'"); rollback;"; echo $?)"
 
 echo "AC-D1.11 - only a transfer can be marked after closing"
 check "a transfer marked after closing is accepted" "$(sql "$(mv_sql $tenant_a $sess_1 INCOME TRANSFER 80000 after_closing true)" >/dev/null 2>&1; echo $?)"
