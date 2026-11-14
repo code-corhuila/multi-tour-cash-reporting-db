@@ -74,3 +74,18 @@ databaseChangeLog:
             path: ../../05_rollbacks/01_ddl/04_alter/005_add_fact_state_creation_and_event_id.rollback.sql
             relativeToChangelogFile: true
             splitStatements: false
+  - changeSet:
+      id: ddl-alter-006
+      author: FernandaRobayo
+      labels: "HU-WFL-002,ddl,04_alter"
+      comment: "cash_movement: the optional payment an income registers (plain id of domain 2) with one income per payment and tenant, so a second saga with another Idempotency-Key cannot record it again (audit 2026-11-13, HU-WFL-002)."
+      changes:
+        - sqlFile:
+            path: 006_add_cash_movement_payment_reference.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/04_alter/006_add_cash_movement_payment_reference.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
