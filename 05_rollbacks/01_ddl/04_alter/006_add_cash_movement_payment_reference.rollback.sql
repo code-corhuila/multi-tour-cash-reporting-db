@@ -1,0 +1,3 @@
+DROP INDEX cash_reporting.uq_cash_movement_tenant_payment_reference;
+ALTER TABLE cash_reporting.cash_movement DROP CONSTRAINT chk_cash_movement_payment_reference_income;
+ALTER TABLE cash_reporting.cash_movement DROP COLUMN payment_reference;
