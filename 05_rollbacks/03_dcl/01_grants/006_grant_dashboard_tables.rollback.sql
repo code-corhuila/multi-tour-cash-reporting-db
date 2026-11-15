@@ -1,0 +1,1 @@
+REVOKE ALL ON cash_reporting.daily_dashboard_projection, cash_reporting.processed_event FROM cash_reporting_writer, cash_reporting_reader;

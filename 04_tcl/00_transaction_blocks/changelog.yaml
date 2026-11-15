@@ -1,0 +1,2 @@
+# Empty on purpose: every folder carries its changelog from day one, so the execution order is fixed.
+databaseChangeLog: []

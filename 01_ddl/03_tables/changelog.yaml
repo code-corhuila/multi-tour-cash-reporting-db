@@ -1,0 +1,245 @@
+databaseChangeLog:
+  - changeSet:
+      id: ddl-tables-001
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "idempotency_key: one key table for the whole domain, unique per tenant and key, 8 to 128 characters (AC-D1.16)."
+      changes:
+        - sqlFile:
+            path: 001_create_idempotency_key.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/001_create_idempotency_key.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-002
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "outbox_event: the nine events of the service, written with the change they announce (AC-D1.17, norm 5.3.11)."
+      changes:
+        - sqlFile:
+            path: 002_create_outbox_event.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/002_create_outbox_event.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-003
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      # DP-D1-5 (language of the stored codes): the PROPUESTO default is English, as domain 2
+      # (OPERATIONAL_OPENING, AUTOMATIC_CREATION, OPEN, CLOSED, FORMAL, AUTOMATIC). Open with Fernanda.
+      comment: "cash_session: one cash per tenant and date, its opening, current closing and pending mark (AC-D1.2 to AC-D1.7, RN-CAJ-001)."
+      changes:
+        - sqlFile:
+            path: 003_create_cash_session.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/003_create_cash_session.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-004
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      # DP-D1-1 (immutable closure snapshots): the PROPUESTO default is taken, so each closing is one
+      # row of cash_session_closure and the session keeps the current closing. Open with the Project Lead.
+      comment: "cash_session_closure: immutable snapshot of each closing, the formula and the sums by medium held by checks (AC-D1.8, RN-CAJ-001, CR-06)."
+      changes:
+        - sqlFile:
+            path: 004_create_cash_session_closure.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/004_create_cash_session_closure.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-005
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_session_reopening: reason, user, time and the closure reopened; one reopening per closure, many per session (AC-D1.9, RN-CAJ-001, CA-010)."
+      changes:
+        - sqlFile:
+            path: 005_create_cash_session_reopening.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/005_create_cash_session_reopening.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-006
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_movement: a money fact with a positive amount, the type giving the direction, the after-closing mark only on a transfer, tenant-first key to the session (AC-D1.10 to AC-D1.12, RN-CAJ-001, GAP-013, CA-016)."
+      changes:
+        - sqlFile:
+            path: 006_create_cash_movement.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/006_create_cash_movement.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-007
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_movement: the unique target of the refund detail's composite key, before the detail exists (AC-D1.14, CR-05)."
+      changes:
+        - sqlFile:
+            path: 007_add_cash_movement_refund_target.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/007_add_cash_movement_refund_target.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-008
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "refund_movement: one detail per refund movement, agreeing with it by composite key, with plain ids of domain 2 and no key to them (AC-D1.14, AC-D1.15, RN-CAJ-001, CR-05, CR-08)."
+      changes:
+        - sqlFile:
+            path: 008_create_refund_movement.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/008_create_refund_movement.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-009
+      author: FernandaRobayo
+      labels: "HU-CSH-001,ddl,03_tables"
+      comment: "cash_closure_correction: the correction note of a closed cash, insert-only, pointing at its closure by composite key; several notes per closure (AC-D1.23, DP-D1-2)."
+      changes:
+        - sqlFile:
+            path: 009_create_cash_closure_correction.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/009_create_cash_closure_correction.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-010
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "daily_dashboard_projection: the six sets of the daily dashboard, one row per tenant and local date, arrays within 10000 (AC-D2.2 to AC-D2.7, DP-D2-3)."
+      changes:
+        - sqlFile:
+            path: 010_create_daily_dashboard_projection.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/010_create_daily_dashboard_projection.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-011
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "processed_event: each consumed event id once per tenant, in the transaction of its effect (AC-D2.8, ADR-004 D10)."
+      changes:
+        - sqlFile:
+            path: 011_create_processed_event.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/011_create_processed_event.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-012
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "reservation_state: the last known state of a reservation, one row per tenant and reservation (AC-D2.18, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 012_create_reservation_state.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/012_create_reservation_state.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-013
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "departure_state: the last known state of a departure, one row per tenant and departure (AC-D2.19, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 013_create_departure_state.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/013_create_departure_state.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-014
+      author: FernandaRobayo
+      labels: "HU-CSH-002,ddl,03_tables"
+      comment: "tenant_time_zone: at most one zone per tenant (AC-D2.20, DP-D2-12)."
+      changes:
+        - sqlFile:
+            path: 014_create_tenant_time_zone.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/014_create_tenant_time_zone.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-015
+      author: FernandaRobayo
+      labels: "HU-CSH-003,ddl,03_tables"
+      comment: "monthly_administrative_report: one derived report row per tenant and period, the total a formula (AC-D3.1 to AC-D3.15)."
+      changes:
+        - sqlFile:
+            path: 015_create_monthly_administrative_report.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/015_create_monthly_administrative_report.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+  - changeSet:
+      id: ddl-tables-016
+      author: FernandaRobayo
+      labels: "HU-SEC-005,HU-SEC-006,ddl,03_tables"
+      comment: "account_session_cutoff: the instant from which the tokens of an account are refused, one row per account (HU-SEC-005 AC4, HU-SEC-006 AC7)."
+      changes:
+        - sqlFile:
+            path: 016_create_account_session_cutoff.sql
+            relativeToChangelogFile: true
+            splitStatements: false
+      rollback:
+        - sqlFile:
+            path: ../../05_rollbacks/01_ddl/03_tables/016_create_account_session_cutoff.rollback.sql
+            relativeToChangelogFile: true
+            splitStatements: false

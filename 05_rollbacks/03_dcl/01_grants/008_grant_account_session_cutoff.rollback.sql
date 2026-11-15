@@ -1,0 +1,1 @@
+REVOKE ALL ON cash_reporting.account_session_cutoff FROM cash_reporting_writer, cash_reporting_reader;

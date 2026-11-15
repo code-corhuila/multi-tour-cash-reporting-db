@@ -1,0 +1,11 @@
+# Execution order of the family: the order of these includes.
+databaseChangeLog:
+  - include:
+      file: 00_transaction_blocks/changelog.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: 01_manual_recoveries/changelog.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: 02_release_tags/changelog.yaml
+      relativeToChangelogFile: true

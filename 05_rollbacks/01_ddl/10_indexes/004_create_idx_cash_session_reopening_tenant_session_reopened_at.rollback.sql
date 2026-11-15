@@ -1,0 +1,1 @@
+DROP INDEX cash_reporting.idx_cash_session_reopening_tenant_session_reopened_at;

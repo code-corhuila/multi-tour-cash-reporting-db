@@ -1,0 +1,8 @@
+# Only the migrations enter the runner image: nothing else of the repository, and above all no .env.
+*
+!changelog
+!01_ddl
+!02_dml
+!03_dcl
+!04_tcl
+!05_rollbacks

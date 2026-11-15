@@ -1,0 +1,1 @@
+DROP TABLE cash_reporting.daily_dashboard_projection;
