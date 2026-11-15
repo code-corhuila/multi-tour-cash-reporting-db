@@ -4,7 +4,7 @@ name: db-ci
 # as the course asks to save automation minutes. No schedule and no manual trigger.
 on:
   pull_request:
-    branches: [develop, qa, main]
+    branches: [develop, qa]
 
 concurrency:
   group: db-ci-${{ github.ref }}
